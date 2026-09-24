@@ -235,6 +235,8 @@ async def run_agent(
     messages.append(current)
 
     ctx = ToolContext(session=session, business=business, contact=contact, pack=pack)
+    hooks = pack.hook_module()
+    tools = TOOL_DEFINITIONS + list(getattr(hooks, "TOOLS", []) if hooks is not None else [])
     tool_calls: list[str] = []
     for _round in range(settings.ai_max_tool_rounds + 1):
         try:
@@ -242,7 +244,7 @@ async def run_agent(
                 model=settings.ai_model,
                 max_tokens=settings.ai_max_tokens,
                 system=system,
-                tools=TOOL_DEFINITIONS,
+                tools=tools,
                 messages=messages,
             )
         except anthropic.APIConnectionError as exc:

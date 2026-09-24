@@ -107,6 +107,8 @@ async def save_offer(
     move_appointment_id: int | None = None,
     rebooked_from_id: int | None = None,
     duration_minutes: int | None = None,
+    service: str | None = None,
+    step_minutes: int | None = None,
 ) -> None:
     await set_state(
         session,
@@ -122,6 +124,8 @@ async def save_offer(
             "move_appointment_id": move_appointment_id,
             "rebooked_from_id": rebooked_from_id,
             "duration_minutes": duration_minutes,
+            "service": service,
+            "step_minutes": step_minutes,
         },
         ttl=OFFER_TTL,
     )
@@ -260,10 +264,49 @@ async def flag_to_staff(
 # --------------------------------------------------------------------------------------
 
 
-async def nudge_schedule(session: AsyncSession, business: Business, schedule: Schedule) -> bool:
-    """Send the 'session due' (or 'recall') message with free slots. Returns True if sent."""
+async def send_payment_reminder(session: AsyncSession, business: Business, schedule: Schedule) -> bool:
+    """Fee installment reminder to the student's parents (or the student). Returns True if sent."""
+    from wam.people import fmt_inr, reach_for_family
+
     if schedule.status != ScheduleStatus.ACTIVE or schedule.next_due_date is None:
         return False
+    template = schedule.template
+    contact = schedule.contact
+    amount = schedule.amount if schedule.amount is not None else template.amount
+    amount_text = fmt_inr(amount) if amount is not None else "your fees"
+    label = plan_label(template, schedule.sessions_done + 1)
+    due = clock.fmt_date(schedule.next_due_date)
+    today = clock.local_today(business.timezone)
+    status = "was due" if schedule.next_due_date < today else "is due"
+    sent_any = False
+    schedule.nudge_count += 1
+    schedule.last_nudged_at = clock.now()
+    for target in await reach_for_family(session, contact):
+        whose = "your" if target.id == contact.id else f"{(contact.name or 'your child').split(' ')[0]}'s"
+        what = f"{whose} {label}" + (f" of {amount_text}" if amount is not None else "")
+        text = (
+            f"Hi {(target.name or 'there').split(' ')[0]}, a reminder from {business.name}: {what} {status} on "
+            f"{due}. Reply here if you have already paid."
+        )
+        out = Outgoing(
+            text=text,
+            template_key="fee_reminder",
+            template_values={"amount": amount_text, "date": due},
+        )
+        row = await send_to_contact(session, business, target, out, handled_by="system", proactive=True)
+        sent_any = sent_any or (row is not None and row.status in ("ok", "dry_run"))
+    return sent_any
+
+
+async def nudge_schedule(session: AsyncSession, business: Business, schedule: Schedule) -> bool:
+    """Send the 'session due' (or 'recall') message with free slots. Returns True if sent.
+
+    Payment plans (fee installments) get a payment reminder instead of slots.
+    """
+    if schedule.status != ScheduleStatus.ACTIVE or schedule.next_due_date is None:
+        return False
+    if schedule.template.kind == "payment":
+        return await send_payment_reminder(session, business, schedule)
     if await sched_engine.active_appointment_for_schedule(session, schedule.id) is not None:
         return False
     contact = schedule.contact
@@ -501,6 +544,8 @@ async def book_from_offer(
             schedule_id=schedule_id,
             source="whatsapp",
             rebooked_from=rebooked_from,
+            service=data.get("service"),
+            step_minutes=data.get("step_minutes"),
         )
     except SlotUnavailable:
         schedule = await session.get(Schedule, schedule_id) if schedule_id else None

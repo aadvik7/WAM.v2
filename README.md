@@ -4,12 +4,13 @@ WAM is an assistant on a clinic's official WhatsApp number. It answers patients,
 people back when their next visit is due, so **patients finish their treatment**. The full product spec is in
 [CLAUDE.md](CLAUDE.md).
 
-This repository contains version 1: the shared engine plus the clinic pack.
+This repository contains the shared engine plus the **clinic pack** (version 1) and the **institute pack**
+(version 2). The business pack (version 3) loads with generic wording on the same engine.
 
 | Part | What it does | Where |
 | --- | --- | --- |
 | **WAM core** | Webhook router (staff vs patient), AI agent + tools, slot engine, schedules, reminders, staff commands, admin API | [`core/`](core) — Python, FastAPI, SQLAlchemy, arq |
-| **WAM admin** | Setup, patients and plans, today's list, reports, simulator | [`admin/`](admin) — Next.js 16 |
+| **WAM admin** | Setup, patients and plans, today's list, reports, simulator; batches, announcements, uploads, doubts and parent-teacher meetings for institutes | [`admin/`](admin) — Next.js 16 |
 | **WAM inbox** | WhatsApp connection and shared inbox: Chatwoot, configured and rebranded (not rewritten) | [`chatwoot/`](chatwoot) + [`infra/`](infra) |
 | **Infra** | Docker Compose for one Mumbai VPS, HTTPS, backups, monitoring | [`infra/`](infra) |
 
@@ -49,8 +50,31 @@ WAM admin (Next.js) ───────── admin API (JWT) ─────�
 - **Ops**: health endpoint (DB, Redis, worker heartbeat, failed sends), alerts to a webhook, nightly backups
   with 30-day retention and off-site copy, restore script, data-retention job, right-to-erasure.
 
-Institute and business packs load with generic wording, booking, FAQ and handoff on the same engine; their
-dedicated features (broadcasts, doubt queue, Excel uploads) are version 2 and 3.
+### Institute pack (version 2)
+
+One official number that the whole staff runs from their own phones, so no teacher's number becomes the helpline.
+
+- **Batches**: each student linked to 1–2 parent numbers; teachers linked to their own batches. Add students
+  one by one or import an Excel/CSV sheet (column names like "Roll No.", "Father Mobile" are recognised).
+- **Announcements**: "Send to NEET-A2: …" from WhatsApp (preview → YES + PIN) or from WAM admin (preview →
+  confirm). Each student and parent gets it individually as the `wam_announcement` template, sent in batches;
+  WAM polls Chatwoot for delivered/read status and shows the counts. Coordinators can message any batch,
+  teachers only their own.
+- **Doubt queue**: "Doubt: …" from a student is matched to a subject (name or aliases, or WAM asks) and the
+  chat is assigned to that subject's Chatwoot team; it closes when the teacher resolves the conversation.
+- **Attendance alerts and test results**: upload a sheet, check the preview (matched students, unknown rows,
+  message count), confirm; parents of absent students get an alert, each family gets their child's score.
+  Teachers can also send "Absent NEET-A2 Physics: 12, 15" from WhatsApp.
+- **Parent-teacher meetings**: pick a batch, date, hours and teachers; parents reply PTM and book a 10-minute
+  slot (the slot engine adds one-off hours for the teachers), with the usual day-before reminder.
+- **Fee installments**: fee plans are schedules of payments — reminders a few days before, on the due date
+  and when overdue, then a flag to staff. "Aarav paid" on WhatsApp or "Record payment" in admin moves to the
+  next installment.
+- **Timetable questions**: upload the weekly (or dated) timetable; "What's my timetable tomorrow?" is
+  answered from it, for students and for parents of students in several batches.
+- **Roles**: owner, coordinator (any batch), teacher (own batches and doubt queue), front desk.
+
+The business pack (version 3) loads with generic wording, booking, FAQ and handoff on the same engine.
 
 ## Run it locally (about 5 minutes)
 
@@ -90,10 +114,11 @@ ruff check wam tests
 cd ../admin && npm run build
 ```
 
-The suite (53 tests) runs against real Postgres and covers the slot engine, concurrent double-booking,
+The suite (78 tests) runs against real Postgres and covers the slot engine, concurrent double-booking,
 schedules, the full 3-sitting root-canal loop including a missed visit, staff commands with YES + PIN and
 lockout, emergency handoff, the AI tool loop (scripted model), Chatwoot webhooks, signatures and template
-delivery, and the admin API. CI runs the same on every push ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+delivery, the admin API, and the institute pack (announcements with read counts, doubt routing to teams,
+Excel/CSV uploads, parent-teacher meetings, fee installments, timetable answers). CI runs the same on every push ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ## Deploy
 
@@ -102,7 +127,7 @@ worker, Postgres, Redis, Caddy for HTTPS), WAM admin on Vercel, Meta/WhatsApp se
 monitoring.
 
 More docs:
-- [docs/staff-guide.md](docs/staff-guide.md) — what doctors and the front desk can send on WhatsApp
+- [docs/staff-guide.md](docs/staff-guide.md) — what doctors, teachers and the front desk can send on WhatsApp
 - [docs/whatsapp-templates.md](docs/whatsapp-templates.md) — templates to submit to Meta
 - [docs/privacy-and-safety.md](docs/privacy-and-safety.md) — DPDP, medical safety, security
 
@@ -113,7 +138,8 @@ core/            WAM core (FastAPI)
   wam/router/    Chatwoot webhook, inbound pipeline, patient conversation handling
   wam/agent/     AI agent loop, tools, emergency detection
   wam/engine/    slots, appointments, schedules
-  wam/packs/     clinic (v1), institute and business packs
+  wam/packs/     clinic (v1), institute (v2) and business packs
+  wam/people.py  students ↔ parents, batches
   wam/staff/     staff command parser, dates, commands with YES + PIN
   wam/jobs/      arq worker, scheduler tick, durable jobs
   wam/api/       admin REST API, reports, simulator, health

@@ -7,6 +7,7 @@ all the same thing: a series of due dates with reminders and follow-ups.
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,11 +40,14 @@ def due_date_for_session(
     """Due date for 1-based `session_number`.
 
     Offsets templates (e.g. vaccinations) are anchored to the plan's anchor date (date of birth).
+    Payment plans (fee installments) fall due on fixed dates: anchor + (n − 1) × gap.
     Gap templates: session 1 is due on the anchor date, later sessions `gap_days` after the last visit.
     """
     if template.offsets_days:
         idx = min(session_number - 1, len(template.offsets_days) - 1)
         return anchor + dt.timedelta(days=int(template.offsets_days[idx]))
+    if template.kind == "payment":
+        return anchor + dt.timedelta(days=template.gap_days * max(session_number - 1, 0))
     if session_number <= 1 or last_visit is None:
         return anchor
     return last_visit + dt.timedelta(days=template.gap_days)
@@ -51,6 +55,9 @@ def due_date_for_session(
 
 def session_label(template: ScheduleTemplate, session_number: int) -> str:
     labels = template.session_labels or []
+    if template.kind == "payment":
+        total = total_sessions(template)
+        return f"{template.name} (installment {session_number}{f' of {total}' if total else ''})"
     if 0 < session_number <= len(labels) and labels[session_number - 1]:
         return f"{template.name} ({labels[session_number - 1]})"
     total = total_sessions(template)
@@ -79,6 +86,7 @@ async def enrol(
     first_due: dt.date | None = None,
     staff_id: int | None = None,
     notes: str | None = None,
+    amount: Decimal | None = None,
 ) -> Schedule:
     """Put a contact on a plan. Session 1 is due on the anchor date (default: today)."""
     if template.business_id != business.id or contact.business_id != business.id:
@@ -87,6 +95,10 @@ async def enrol(
         raise ScheduleError(f"Plan '{template.name}' is not active")
     today = clock.local_today(business.timezone)
     anchor = anchor_date or today
+    if template.kind == "payment" and not template.offsets_days and (first_due or not anchor_date):
+        # Installments fall on anchor + (n − 1) × gap; anchor the series so the next one lands on
+        # first_due (default: today) and later ones follow at the plan's gap.
+        anchor = (first_due or today) - dt.timedelta(days=template.gap_days * sessions_done)
     total = total_sessions(template)
     if total is not None and sessions_done >= total:
         raise ScheduleError("All sessions are already done")
@@ -106,7 +118,7 @@ async def enrol(
     next_session = sessions_done + 1
     if first_due is not None:
         next_due = first_due
-    elif template.offsets_days:
+    elif template.offsets_days or template.kind == "payment":
         next_due = due_date_for_session(template, anchor, next_session, None)
     elif sessions_done == 0:
         next_due = anchor
@@ -124,6 +136,7 @@ async def enrol(
         next_due_date=next_due,
         created_by_staff_id=staff_id,
         notes=notes,
+        amount=amount,
     )
     session.add(schedule)
     await session.flush()
@@ -154,6 +167,29 @@ async def on_appointment_done(session: AsyncSession, business: Business, appt: A
     visit_day = clock.to_local(appt.start_at, business.timezone).date()
     schedule.next_due_date = due_date_for_session(
         template, schedule.anchor_date, schedule.sessions_done + 1, visit_day
+    )
+
+
+async def record_payment(session: AsyncSession, schedule: Schedule) -> None:
+    """One installment of a payment plan was paid: move to the next due date or complete the plan."""
+    await session.refresh(schedule, ["template"])
+    template = schedule.template
+    if template.kind != "payment":
+        raise ScheduleError("Only fee plans take payments")
+    if schedule.status not in (ScheduleStatus.ACTIVE, ScheduleStatus.PAUSED):
+        raise ScheduleError("This plan is not active")
+    schedule.sessions_done += 1
+    schedule.nudge_count = 0
+    schedule.last_nudged_at = None
+    schedule.needs_staff = False
+    total = schedule.sessions_total
+    if total is not None and schedule.sessions_done >= total:
+        schedule.status = ScheduleStatus.COMPLETED
+        schedule.next_due_date = None
+        schedule.completed_at = clock.now()
+        return
+    schedule.next_due_date = due_date_for_session(
+        template, schedule.anchor_date, schedule.sessions_done + 1, None
     )
 
 
@@ -196,6 +232,10 @@ async def active_appointment_for_schedule(session: AsyncSession, schedule_id: in
 
 
 async def set_next_due(session: AsyncSession, schedule: Schedule, due: dt.date) -> None:
+    template = await session.get(ScheduleTemplate, schedule.template_id)
+    if template is not None and template.kind == "payment" and not template.offsets_days:
+        # Moving an installment moves the ones after it too.
+        schedule.anchor_date = due - dt.timedelta(days=template.gap_days * schedule.sessions_done)
     schedule.next_due_date = due
     schedule.nudge_count = 0
     schedule.last_nudged_at = None

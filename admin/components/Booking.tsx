@@ -6,6 +6,7 @@ import { bpath, useBusiness } from "@/lib/business";
 import { fmtTime } from "@/lib/format";
 import type { Appointment, Contact, Resource, Schedule, Slot } from "@/lib/types";
 import { ErrorBox, Field, Modal, StatusBadge, useAction } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 function todayIn(tz: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -25,6 +26,7 @@ export function BookModal({
   onDone: () => void;
 }) {
   const { business } = useBusiness();
+  const v = useVocab();
   const [resources, setResources] = useState<Resource[]>([]);
   const [resourceId, setResourceId] = useState<number | null>(schedule?.resource_id ?? moving?.resource_id ?? null);
   const [date, setDate] = useState(business ? todayIn(business.timezone) : "");
@@ -97,7 +99,7 @@ export function BookModal({
             {!contact && <button className="btn link" onClick={() => setWho(null)}>change</button>}
           </div>
         ) : (
-          <Field label="Patient">
+          <Field label={v.Person}>
             <input placeholder="Search name or phone" value={query} onChange={(e) => setQuery(e.target.value)} />
             {matches.length > 0 && (
               <div className="card" style={{ padding: 6 }}>
@@ -112,7 +114,7 @@ export function BookModal({
         )}
         {schedule && <div className="small muted">For plan: {schedule.template} (visit {schedule.sessions_done + 1})</div>}
         <div className="form-grid">
-          <Field label="Doctor">
+          <Field label={v.Resource}>
             <select value={resourceId ?? ""} onChange={(e) => setResourceId(Number(e.target.value))}>
               {resources.map((r) => (
                 <option key={r.id} value={r.id}>{r.name}</option>
@@ -165,6 +167,7 @@ export function BookModal({
 
 export function AppointmentActions({ appt, onChange, now }: { appt: Appointment; onChange: () => void; now?: string }) {
   const { business } = useBusiness();
+  const v = useVocab();
   const { busy, error, run } = useAction();
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [moving, setMoving] = useState(false);
@@ -179,7 +182,7 @@ export function AppointmentActions({ appt, onChange, now }: { appt: Appointment;
   async function cancel() {
     const ok = await run(
       () => api(bpath(business, `/appointments/${appt.id}/cancel`), { method: "POST", body: { offer_rebook: true } }),
-      "Cancelled; the patient was offered new slots",
+      `Cancelled; the ${v.person} was offered new slots`,
     );
     setConfirmCancel(false);
     if (ok) onChange();
@@ -201,7 +204,7 @@ export function AppointmentActions({ appt, onChange, now }: { appt: Appointment;
           <p>
             {appt.contact_name} · <StatusBadge status={appt.status} /> · {fmtTime(appt.start_at)} with {appt.resource_name}
           </p>
-          <p className="muted">WAM will message the patient with 3 new slots and rebook on their reply.</p>
+          <p className="muted">WAM will message the {v.person} with 3 new slots and rebook on their reply.</p>
           <div className="form-actions">
             <button className="btn" onClick={() => setConfirmCancel(false)}>Keep it</button>
             <button className="btn danger" disabled={busy} onClick={() => void cancel()}>Yes, cancel</button>

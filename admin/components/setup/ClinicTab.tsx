@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
+import { useVocab } from "@/lib/vocab";
 import type { Business } from "@/lib/types";
 import { Card, ErrorBox, Field, useAction } from "@/components/ui";
 
@@ -42,16 +43,18 @@ const SETTING_FIELDS: { key: string; label: string; type: "number" | "time" | "t
   { key: "second_followup_after_hours", label: "Second follow-up after (hours)", type: "number" },
   { key: "renudge_after_days", label: "Re-send due reminder after (days)", type: "number" },
   { key: "max_nudges", label: "Due reminders before flagging staff", type: "number" },
-  { key: "late_notify_window_hours", label: "'Running late' tells patients within (hours)", type: "number" },
+  { key: "late_notify_window_hours", label: "'Running late' tells {people} within (hours)", type: "number" },
   { key: "retention_days", label: "Delete message logs after (days)", type: "number", hint: "DPDP data-retention rule." },
   { key: "privacy_url", label: "Privacy policy URL", type: "text" },
   { key: "assistant_name", label: "Assistant name", type: "text" },
   { key: "template_language", label: "Template language code", type: "text", hint: "Exactly as approved in Meta, e.g. en, en_US, hi." },
-  { key: "ai_enabled", label: "Use AI for patient chats", type: "bool", hint: "Off = rules only (FAQ, timings, booking by number, handoff)." },
+  { key: "ai_enabled", label: "Use AI for {person} chats", type: "bool", hint: "Off = rules only (FAQ, timings, booking by number, handoff)." },
 ];
 
 export function ClinicTab() {
   const { business, reload } = useBusiness();
+  const v = useVocab();
+  const words = (text: string) => text.replace("{people}", v.people).replace("{person}", v.person);
   const [form, setForm] = useState<Partial<Business>>({});
   const [hoursText, setHoursText] = useState<Record<string, string>>({});
   const [settings, setSettings] = useState<Record<string, unknown>>({});
@@ -90,7 +93,7 @@ export function ClinicTab() {
     cleanSettings.extra_emergency_words = emergencyWords.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
     const ok = await run(
       () => api(`/api/businesses/${business!.id}`, { method: "PATCH", body: { ...form, hours, settings: cleanSettings } }),
-      "Clinic settings saved",
+      `${v.Org} settings saved`,
     );
     if (ok) await reload();
   }
@@ -98,11 +101,11 @@ export function ClinicTab() {
   return (
     <form onSubmit={save} className="stack">
       <ErrorBox error={error} />
-      <Card title="Clinic details" actions={<span className="badge accent">{business.type} pack</span>}>
+      <Card title={`${v.Org} details`} actions={<span className="badge accent">{business.type} pack</span>}>
         <div className="form-grid">
           <Field label="Name"><input value={form.name || ""} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-          <Field label="Phone (shown to patients)"><input value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-          <Field label="Emergency number" hint="Sent instantly when a patient uses emergency words."><input value={form.emergency_number || ""} onChange={(e) => setForm({ ...form, emergency_number: e.target.value })} /></Field>
+          <Field label={`Phone (shown to ${v.people})`}><input value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
+          <Field label="Emergency number" hint={`Sent instantly when a ${v.person} uses emergency words.`}><input value={form.emergency_number || ""} onChange={(e) => setForm({ ...form, emergency_number: e.target.value })} /></Field>
           <Field label="Timezone"><input value={form.timezone || ""} onChange={(e) => setForm({ ...form, timezone: e.target.value })} /></Field>
         </div>
         <div className="form-grid" style={{ marginTop: 12 }}>
@@ -110,8 +113,8 @@ export function ClinicTab() {
           <Field label="Google Maps link"><input value={form.maps_url || ""} onChange={(e) => setForm({ ...form, maps_url: e.target.value })} /></Field>
         </div>
       </Card>
-      <Card title="Opening hours (shown to patients)">
-        <p className="small muted">Doctors&apos; bookable hours are set per doctor under &quot;Doctors &amp; hours&quot;. Leave a day empty if closed.</p>
+      <Card title={`Opening hours (shown to ${v.people})`}>
+        <p className="small muted">{v.Resources}&apos; bookable hours are set per {v.resource} under &quot;{v.Resources} &amp; hours&quot;. Leave a day empty if closed.</p>
         <div className="form-grid">
           {DAYS.map(([d, label]) => (
             <Field key={d} label={label}>
@@ -123,7 +126,7 @@ export function ClinicTab() {
       <Card title="Reminders, follow-ups and privacy">
         <div className="form-grid">
           {SETTING_FIELDS.map((f) => (
-            <Field key={f.key} label={f.label} hint={f.hint}>
+            <Field key={f.key} label={words(f.label)} hint={f.hint}>
               {f.type === "bool" ? (
                 <select value={settings[f.key] ? "yes" : "no"} onChange={(e) => setSettings({ ...settings, [f.key]: e.target.value === "yes" })}>
                   <option value="yes">Yes</option>
@@ -149,7 +152,7 @@ export function ClinicTab() {
         </div>
       </Card>
       <div className="form-actions">
-        <button className="btn primary" disabled={busy}>{busy ? "Saving…" : "Save clinic settings"}</button>
+        <button className="btn primary" disabled={busy}>{busy ? "Saving…" : `Save ${v.org} settings`}</button>
       </div>
     </form>
   );

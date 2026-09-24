@@ -56,6 +56,18 @@ export async function api<T = unknown>(
   return data as T;
 }
 
+/** Multipart upload (e.g. an Excel sheet). The browser sets the multipart boundary itself. */
+export async function apiUpload<T = unknown>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`/api/core${path}`, { method: "POST", body: form, cache: "no-store" });
+  if (res.status === 401) {
+    window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+    throw new ApiError("Please sign in again", 401);
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(detailMessage(data, `Upload failed (${res.status})`), res.status);
+  return data as T;
+}
+
 export async function logout(): Promise<void> {
   await fetch("/api/auth/logout", { method: "POST" });
   try {

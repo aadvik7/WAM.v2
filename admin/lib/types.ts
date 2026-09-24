@@ -80,6 +80,9 @@ export interface Template {
   duration_minutes: number | null;
   aliases: string[];
   is_active: boolean;
+  kind: "visit" | "payment";
+  amount: number | null;
+  reminder_days_before: number | null;
 }
 
 export interface Faq {
@@ -93,6 +96,7 @@ export interface Contact {
   id: number;
   name: string | null;
   phone: string | null;
+  roll?: string | null;
   guardian: { id: number; name: string | null; phone: string | null } | null;
   date_of_birth: string | null;
   language: string | null;
@@ -112,6 +116,8 @@ export interface Schedule {
   contact_name: string | null;
   template_id: number;
   template: string | null;
+  kind: "visit" | "payment";
+  amount: number | null;
   resource_id: number | null;
   status: "active" | "paused" | "completed" | "cancelled";
   anchor_date: string;
@@ -176,4 +182,124 @@ export interface Meta {
   command_keys: string[];
   packs: Record<string, { label: string; vocab: Record<string, string> }>;
   staff_help: string;
+}
+
+// ---- Institute pack ----
+
+export interface Batch {
+  id: number;
+  name: string;
+  students: number;
+  teachers: number;
+}
+
+export interface Student {
+  id: number;
+  name: string | null;
+  roll: string | null;
+  phone: string | null;
+  parents: { id: number; name: string | null; phone: string | null }[];
+  opted_out: boolean;
+}
+
+export interface BatchDetail {
+  id: number;
+  name: string;
+  students: Student[];
+  teachers: { id: number; name: string; phone: string }[];
+}
+
+export interface Subject {
+  id: number;
+  name: string;
+  aliases: string[];
+  chatwoot_team_id: number | null;
+}
+
+export interface Doubt {
+  id: number;
+  contact_id: number;
+  student: string | null;
+  subject: string | null;
+  batch: string | null;
+  question: string;
+  status: "open" | "closed";
+  created_at: string;
+  closed_at: string | null;
+}
+
+export interface BroadcastSummary {
+  id: number;
+  group_id: number | null;
+  batch: string | null;
+  message: string;
+  audience: "everyone" | "parents" | "students";
+  status: "draft" | "sending" | "sent" | "cancelled";
+  recipients: number;
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  counts: { students?: number; parents?: number; unreachable?: number };
+  preview: string;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface BroadcastRecipient {
+  contact_id: number;
+  name: string | null;
+  phone: string;
+  status: "queued" | "sent" | "delivered" | "read" | "failed" | "skipped";
+  error: string | null;
+}
+
+export interface BroadcastDetail extends Omit<BroadcastSummary, "recipients"> {
+  recipients: BroadcastRecipient[];
+}
+
+export interface UploadRow {
+  row: number;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface Upload {
+  id: number;
+  kind: "students" | "attendance" | "results" | "timetable";
+  filename: string | null;
+  label: string | null;
+  group_id: number | null;
+  status: "preview" | "applied" | "cancelled";
+  summary: Record<string, unknown>;
+  created_at: string;
+  applied_at: string | null;
+  rows?: UploadRow[];
+}
+
+export interface PtmEvent {
+  id: number;
+  group_id: number;
+  batch: string | null;
+  title: string;
+  date: string;
+  start: string;
+  end: string;
+  slot_minutes: number;
+  resource_ids: number[];
+  booked: number;
+  free: number;
+  broadcast_id: number | null;
+}
+
+export interface TimetableRow {
+  id: number;
+  group_id: number;
+  weekday: number | null;
+  date: string | null;
+  start: string;
+  end: string | null;
+  subject: string;
+  teacher: string | null;
+  room: string | null;
 }

@@ -18,7 +18,8 @@ async function forward(request: Request, ctx: { params: Promise<{ path: string[]
   const contentType = request.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
   const init: RequestInit = { method: request.method, headers, cache: "no-store" };
-  if (!["GET", "HEAD"].includes(request.method)) init.body = await request.text();
+  // Binary-safe: file uploads (multipart) must reach WAM core byte for byte.
+  if (!["GET", "HEAD"].includes(request.method)) init.body = await request.arrayBuffer();
   let res: Response;
   try {
     res = await fetch(target, init);

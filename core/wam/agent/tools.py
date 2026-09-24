@@ -172,6 +172,8 @@ async def _due_plan(ctx: ToolContext) -> Schedule | None:
     today = clock.local_today(ctx.business.timezone)
     candidates = []
     for s in await sched_engine.contact_schedules(ctx.session, ctx.contact.id):
+        if s.template.kind == "payment":
+            continue
         if s.next_due_date is None or s.next_due_date > today + dt.timedelta(days=7):
             continue
         if await sched_engine.active_appointment_for_schedule(ctx.session, s.id) is None:
@@ -231,6 +233,8 @@ async def run_tool(ctx: ToolContext, name: str, args: dict[str, Any]) -> dict[st
                 or schedule.status != ScheduleStatus.ACTIVE
             ):
                 return {"error": "Unknown plan id."}
+            if schedule.template.kind == "payment":
+                return {"error": "That is a fee plan, not a visit. Use get_fee_status."}
         else:
             schedule = await _due_plan(ctx)
         resource_ids = None
@@ -318,6 +322,11 @@ async def run_tool(ctx: ToolContext, name: str, args: dict[str, Any]) -> dict[st
             "note": "Tell the patient a team member will reply here soon. Do not promise a time.",
         }
 
+    hooks = ctx.pack.hook_module()
+    if hooks is not None:
+        result = await hooks.run_tool(ctx, name, args)
+        if result is not None:
+            return result
     return {"error": f"Unknown tool {name}"}
 
 

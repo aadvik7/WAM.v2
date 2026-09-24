@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
+import { useVocab } from "@/lib/vocab";
 import { WEEKDAYS, fmtDate } from "@/lib/format";
 import type { AvailabilityBlock, Resource, StaffMember } from "@/lib/types";
 import { Card, Empty, ErrorBox, Field, Modal, toast, useAction, useLoad } from "@/components/ui";
@@ -15,6 +16,7 @@ interface AvailabilityOut {
 
 export function DoctorsTab() {
   const { business } = useBusiness();
+  const v = useVocab();
   const resources = useLoad(() => api<Resource[]>(bpath(business, "/resources")), [business?.id]);
   const staff = useLoad(() => api<StaffMember[]>(bpath(business, "/staff")), [business?.id]);
   const [editing, setEditing] = useState<Resource | "new" | null>(null);
@@ -28,11 +30,11 @@ export function DoctorsTab() {
 
   return (
     <div className="stack">
-      <Card title="Doctors" actions={<button className="btn primary small" onClick={() => setEditing("new")}>Add doctor</button>}>
+      <Card title={v.Resources} actions={<button className="btn primary small" onClick={() => setEditing("new")}>Add {v.resource}</button>}>
         <ErrorBox error={resources.error} />
-        {!resources.data ? <Empty>Loading…</Empty> : resources.data.length === 0 ? <Empty>Add your first doctor to start taking bookings.</Empty> : (
+        {!resources.data ? <Empty>Loading…</Empty> : resources.data.length === 0 ? <Empty>Add your first {v.resource} to start taking bookings.</Empty> : (
           <table>
-            <thead><tr><th>Name</th><th>Specialty</th><th>Slot length</th><th>WhatsApp staff</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Name</th><th>{business?.type === "institute" ? "Subject" : "Specialty"}</th><th>Slot length</th><th>WhatsApp staff</th><th>Status</th><th /></tr></thead>
             <tbody>
               {resources.data.map((r) => (
                 <tr key={r.id} style={selected === r.id ? { background: "var(--accent-soft)" } : undefined}>
@@ -48,7 +50,9 @@ export function DoctorsTab() {
           </table>
         )}
         <p className="small muted" style={{ marginTop: 10 }}>
-          Plans are offered with doctors whose specialty matches the plan (e.g. a Dental plan only offers Dental doctors).
+          {business?.type === "clinic"
+            ? "Plans are offered with doctors whose specialty matches the plan (e.g. a Dental plan only offers Dental doctors)."
+            : `Link each ${v.resource} to their staff WhatsApp number so their own commands work.`}
         </p>
       </Card>
       {current && <AvailabilityEditor key={current.id} resource={current} />}
@@ -70,13 +74,15 @@ export function DoctorsTab() {
 
 function ResourceForm({ resource, staff, onClose, onDone }: { resource: Resource | null; staff: StaffMember[]; onClose: () => void; onDone: (r: Resource) => void }) {
   const { business } = useBusiness();
+  const v = useVocab();
+  const institute = business?.type === "institute";
   const [form, setForm] = useState({
     name: resource?.name || "",
     specialty: resource?.specialty || "",
     slot_minutes: resource?.slot_minutes || 15,
     staff_id: resource?.staff_id ?? "",
     is_active: resource?.is_active ?? true,
-    kind: resource?.kind || "doctor",
+    kind: resource?.kind || v.resource.split(" ")[0],
   });
   const { busy, error, run } = useAction();
   async function save(e: React.FormEvent) {
@@ -84,19 +90,19 @@ function ResourceForm({ resource, staff, onClose, onDone }: { resource: Resource
     const body = { ...form, specialty: form.specialty || null, staff_id: form.staff_id === "" ? null : Number(form.staff_id), slot_minutes: Number(form.slot_minutes) };
     const r = await run(
       () => api<Resource>(bpath(business, resource ? `/resources/${resource.id}` : "/resources"), { method: resource ? "PATCH" : "POST", body }),
-      "Doctor saved",
+      `${v.Resource} saved`,
     );
     if (r) onDone(r);
   }
   return (
-    <Modal title={resource ? `Edit ${resource.name}` : "Add doctor"} onClose={onClose}>
+    <Modal title={resource ? `Edit ${resource.name}` : `Add ${v.resource}`} onClose={onClose}>
       <form onSubmit={save}>
         <ErrorBox error={error} />
         <div className="form-grid">
-          <Field label="Name"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder="Dr. Mehta" /></Field>
-          <Field label="Specialty" hint="Dental, Skin, Physiotherapy, Paediatrics, Physician…"><input value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
+          <Field label="Name"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder={institute ? "Mr. Rao" : business?.type === "clinic" ? "Dr. Mehta" : "Asha"} /></Field>
+          <Field label={institute ? "Subject" : "Specialty"} hint={institute ? "Physics, Chemistry, Maths…" : business?.type === "clinic" ? "Dental, Skin, Physiotherapy, Paediatrics, Physician…" : "Hair, Nails, Trainer…"}><input value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
           <Field label="Slot length (minutes)"><input type="number" min={5} max={480} value={form.slot_minutes} onChange={(e) => setForm({ ...form, slot_minutes: Number(e.target.value) })} /></Field>
-          <Field label="Linked staff (their WhatsApp)" hint="'Cancel my 5 pm' uses this doctor.">
+          <Field label="Linked staff (their WhatsApp)" hint={`'Cancel my 5 pm' uses this ${v.resource}.`}>
             <select value={form.staff_id} onChange={(e) => setForm({ ...form, staff_id: e.target.value === "" ? "" : Number(e.target.value) })}>
               <option value="">None</option>
               {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -117,6 +123,7 @@ interface Row { weekday: number | null; start: string; end: string }
 
 function AvailabilityEditor({ resource }: { resource: Resource }) {
   const { business } = useBusiness();
+  const v = useVocab();
   const avail = useLoad(() => api<AvailabilityOut>(bpath(business, `/resources/${resource.id}/availability`)), [business?.id, resource.id]);
   const [weekly, setWeekly] = useState<Row[]>([]);
   const [breaks, setBreaks] = useState<Row[]>([]);
@@ -159,7 +166,7 @@ function AvailabilityEditor({ resource }: { resource: Resource }) {
       () => api<{ cancelled: number; offered_new_slots: number }>(bpath(business, `/resources/${resource.id}/leave`), { method: "POST", body: { ...leave, end_date: leave.end_date || leave.start_date, reason: leave.reason || null } }),
     );
     if (r) {
-      toast(`Leave added. ${r.cancelled} appointment(s) cancelled, ${r.offered_new_slots} patient(s) offered new slots.`);
+      toast(`Leave added. ${r.cancelled} appointment(s) cancelled, ${r.offered_new_slots} ${v.person}(s) offered new slots.`);
       setLeave({ start_date: "", end_date: "", reason: "", move_appointments: true });
       void avail.reload();
     }
@@ -231,7 +238,7 @@ function AvailabilityEditor({ resource }: { resource: Resource }) {
             <Field label="To (inclusive)"><input type="date" value={leave.end_date} onChange={(e) => setLeave({ ...leave, end_date: e.target.value })} /></Field>
           </div>
           <Field label="Reason (internal)"><input value={leave.reason} onChange={(e) => setLeave({ ...leave, reason: e.target.value })} /></Field>
-          <label className="check"><input type="checkbox" checked={leave.move_appointments} onChange={(e) => setLeave({ ...leave, move_appointments: e.target.checked })} /> Cancel booked patients and offer them 3 new slots each</label>
+          <label className="check"><input type="checkbox" checked={leave.move_appointments} onChange={(e) => setLeave({ ...leave, move_appointments: e.target.checked })} /> Cancel booked {v.people} and offer them 3 new slots each</label>
           <div className="form-actions"><button className="btn primary" disabled={leaveAction.busy}>Add leave</button></div>
         </form>
       </Card>

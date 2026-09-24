@@ -43,6 +43,18 @@ async def enqueue(function: str, *args: Any, job_id: str | None = None) -> bool:
     return job is not None
 
 
+async def kick_jobs() -> None:
+    """Ask the worker to run due jobs now rather than at the next minute tick (e.g. an announcement a
+    coordinator just sent). Best effort: if Redis is down, the minute tick still runs them."""
+    if get_settings().process_inline:
+        return
+    try:
+        pool = await get_pool()
+        await pool.enqueue_job("run_jobs", _defer_by=dt.timedelta(seconds=1))
+    except Exception as exc:
+        log.warning("could not wake the worker (%s); jobs run at the next tick", exc)
+
+
 async def schedule_job(
     session: AsyncSession,
     business_id: int,

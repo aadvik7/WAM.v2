@@ -7,9 +7,11 @@ import { bpath, useBusiness } from "@/lib/business";
 import { fmtDateTime } from "@/lib/format";
 import type { Message } from "@/lib/types";
 import { Card, Empty, ErrorBox, StatusBadge, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 export default function MessagesPage() {
   const { business } = useBusiness();
+  const v = useVocab();
   const [audience, setAudience] = useState("");
   const [status, setStatus] = useState("");
   const [pages, setPages] = useState<Message[][]>([]);
@@ -36,7 +38,7 @@ export default function MessagesPage() {
         <div className="row">
           <select value={audience} onChange={(e) => setAudience(e.target.value)} style={{ width: 150 }} aria-label="Audience">
             <option value="">Everyone</option>
-            <option value="patient">Patients</option>
+            <option value="patient">{v.People}</option>
             <option value="staff">Staff</option>
           </select>
           <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: 150 }} aria-label="Status">
@@ -59,7 +61,7 @@ export default function MessagesPage() {
                     <td className="nowrap small">{fmtDateTime(m.created_at)}</td>
                     <td>{m.direction === "in" ? "⬅" : "➡"}</td>
                     <td className="nowrap small">
-                      {m.contact_id ? <Link href={`/patients/${m.contact_id}`}>{m.phone || "patient"}</Link> : m.phone}
+                      {m.contact_id ? <Link href={`/patients/${m.contact_id}`}>{m.phone || v.person}</Link> : m.phone}
                       {m.audience === "staff" && <div><span className="badge info">staff</span></div>}
                     </td>
                     <td style={{ whiteSpace: "pre-wrap", maxWidth: 520 }}>

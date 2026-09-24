@@ -8,6 +8,7 @@ in the business's timezone.
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -19,6 +20,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -166,6 +168,8 @@ class Contact(Base):
     language: Mapped[str | None] = mapped_column(String(10))
     date_of_birth: Mapped[dt.date | None] = mapped_column(Date)
     guardian_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id", ondelete="SET NULL"))
+    # Roll number / student ID (institute pack); unique per business
+    external_id: Mapped[str | None] = mapped_column(String(50))
     consent_notice_sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     consent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     opted_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -189,6 +193,13 @@ class Contact(Base):
             postgresql_where=text("phone IS NOT NULL AND guardian_id IS NULL"),
         ),
         Index("ix_contacts_business_name", "business_id", "name"),
+        Index(
+            "uq_contacts_business_external_id",
+            "business_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
     )
 
 
@@ -236,13 +247,13 @@ class Resource(Base):
 
 
 class Availability(Base):
-    """Working hours (weekly), breaks (weekly or every day) and leave (date-time range)."""
+    """Working hours (weekly), breaks (weekly or every day), leave and extra one-off hours (date-time ranges)."""
 
     __tablename__ = "availability"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id", ondelete="CASCADE"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(10), nullable=False)  # weekly | break | leave
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)  # weekly | break | leave | extra
     weekday: Mapped[int | None] = mapped_column(SmallInteger)  # 0=Monday … 6=Sunday; NULL break = every day
     start_time: Mapped[dt.time | None] = mapped_column(Time)
     end_time: Mapped[dt.time | None] = mapped_column(Time)
@@ -252,11 +263,11 @@ class Availability(Base):
     created_at: Mapped[dt.datetime] = _now_col()
 
     __table_args__ = (
-        CheckConstraint("kind IN ('weekly','break','leave')", name="ck_availability_kind"),
+        CheckConstraint("kind IN ('weekly','break','leave','extra')", name="ck_availability_kind"),
         CheckConstraint("weekday IS NULL OR weekday BETWEEN 0 AND 6", name="ck_availability_weekday"),
         CheckConstraint(
-            "(kind = 'leave' AND start_at IS NOT NULL AND end_at IS NOT NULL AND end_at > start_at) OR "
-            "(kind <> 'leave' AND start_time IS NOT NULL AND end_time IS NOT NULL AND end_time > start_time)",
+            "(kind IN ('leave','extra') AND start_at IS NOT NULL AND end_at IS NOT NULL AND end_at > start_at) OR "
+            "(kind IN ('weekly','break') AND start_time IS NOT NULL AND end_time IS NOT NULL AND end_time > start_time)",
             name="ck_availability_shape",
         ),
         CheckConstraint("kind <> 'weekly' OR weekday IS NOT NULL", name="ck_availability_weekly_weekday"),
@@ -286,6 +297,9 @@ class ScheduleTemplate(Base):
     session_labels: Mapped[list[str] | None] = mapped_column(JSONB)
     duration_minutes: Mapped[int | None] = mapped_column(SmallInteger)
     reminder_rules: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # visit = book a slot when due; payment = remind before each due date (fee installments)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="visit", server_default="visit")
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[dt.datetime] = _now_col()
@@ -294,11 +308,16 @@ class ScheduleTemplate(Base):
         UniqueConstraint("business_id", "name", name="uq_schedule_templates_business_name"),
         CheckConstraint("gap_days >= 0", name="ck_schedule_templates_gap"),
         CheckConstraint("session_count IS NULL OR session_count >= 1", name="ck_schedule_templates_count"),
+        CheckConstraint("kind IN ('visit','payment')", name="ck_schedule_templates_kind"),
     )
 
     @property
     def is_ongoing(self) -> bool:
         return self.session_count is None and not self.offsets_days
+
+    @property
+    def is_payment(self) -> bool:
+        return self.kind == "payment"
 
 
 class Schedule(Base):
@@ -318,6 +337,8 @@ class Schedule(Base):
     sessions_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sessions_total: Mapped[int | None] = mapped_column(Integer)
     next_due_date: Mapped[dt.date | None] = mapped_column(Date)
+    # Installment amount for payment plans (overrides the template's amount)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     nudge_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_nudged_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     missed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -404,10 +425,48 @@ class Broadcast(Base):
     template_name: Mapped[str] = mapped_column(String(100), nullable=False)
     params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     sender_staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id", ondelete="SET NULL"))
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    created_by_admin_id: Mapped[int | None] = mapped_column(ForeignKey("admin_users.id", ondelete="SET NULL"))
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # parents | students | everyone
+    audience: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="everyone", server_default="everyone"
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft"
+    )  # draft|sending|sent|cancelled
+    recipients_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivered_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     read_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[dt.datetime] = _now_col()
+    sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BroadcastRecipient(Base):
+    """One person an announcement goes to (each person individually), with WhatsApp delivery status."""
+
+    __tablename__ = "broadcast_recipients"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    broadcast_id: Mapped[int] = mapped_column(ForeignKey("broadcasts.id", ondelete="CASCADE"), nullable=False)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(32))
+    # queued | sent | delivered | read | failed | skipped
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="queued")
+    error: Mapped[str | None] = mapped_column(Text)
+    chatwoot_conversation_id: Mapped[int | None] = mapped_column(Integer)
+    chatwoot_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now(), onupdate=_now, nullable=False
+    )
+
+    contact: Mapped[Contact] = relationship(lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("broadcast_id", "contact_id", name="uq_broadcast_recipients_contact"),
+        Index("ix_broadcast_recipients_status", "broadcast_id", "status"),
+    )
 
 
 class MessageLog(Base):
@@ -534,3 +593,150 @@ class AdminUser(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[dt.datetime] = _now_col()
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# --------------------------------------------------------------------------------------
+# Institute pack
+# --------------------------------------------------------------------------------------
+
+
+class ContactLink(Base):
+    """Links a student to their parents (1–2 numbers per student)."""
+
+    __tablename__ = "contact_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    linked_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    relation: Mapped[str] = mapped_column(String(20), nullable=False, default="parent")
+    created_at: Mapped[dt.datetime] = _now_col()
+
+    linked: Mapped[Contact] = relationship(foreign_keys=[linked_id], lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("contact_id", "linked_id", name="uq_contact_links_pair"),
+        CheckConstraint("contact_id <> linked_id", name="ck_contact_links_not_self"),
+        Index("ix_contact_links_linked", "linked_id"),
+    )
+
+
+class GroupStaff(Base):
+    """Teachers assigned to a batch (a teacher can message and see only their own batches)."""
+
+    __tablename__ = "group_staff"
+
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id", ondelete="CASCADE"), primary_key=True)
+
+
+class Subject(Base):
+    """A subject whose doubts go to one Chatwoot team (e.g. Physics → Physics teachers)."""
+
+    __tablename__ = "subjects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    chatwoot_team_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[dt.datetime] = _now_col()
+
+    __table_args__ = (UniqueConstraint("business_id", "name", name="uq_subjects_business_name"),)
+
+
+class Doubt(Base):
+    __tablename__ = "doubts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False)
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="open")  # open | closed
+    chatwoot_conversation_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[dt.datetime] = _now_col()
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    contact: Mapped[Contact] = relationship(lazy="selectin")
+    subject: Mapped[Subject | None] = relationship(lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("status IN ('open','closed')", name="ck_doubts_status"),
+        Index("ix_doubts_business_status", "business_id", "status"),
+    )
+
+
+class Import(Base):
+    """An uploaded sheet (students, attendance, test results, timetable): parsed, previewed, then sent."""
+
+    __tablename__ = "imports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # students | attendance | results | timetable
+    filename: Mapped[str | None] = mapped_column(String(200))
+    label: Mapped[str | None] = mapped_column(String(200))  # class name / test name
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
+    rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(12), nullable=False, default="preview"
+    )  # preview|applied|cancelled
+    created_by_staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id", ondelete="SET NULL"))
+    created_by_admin_id: Mapped[int | None] = mapped_column(ForeignKey("admin_users.id", ondelete="SET NULL"))
+    created_at: Mapped[dt.datetime] = _now_col()
+    applied_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('students','attendance','results','timetable')", name="ck_imports_kind"),
+        CheckConstraint("status IN ('preview','applied','cancelled')", name="ck_imports_status"),
+    )
+
+
+class TimetableEntry(Base):
+    __tablename__ = "timetable_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    weekday: Mapped[int | None] = mapped_column(SmallInteger)  # 0=Mon; NULL when `date` is set
+    date: Mapped[dt.date | None] = mapped_column(Date)  # one-off entry that overrides the weekday plan
+    start_time: Mapped[dt.time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[dt.time | None] = mapped_column(Time)
+    subject: Mapped[str] = mapped_column(String(80), nullable=False)
+    teacher: Mapped[str | None] = mapped_column(String(120))
+    room: Mapped[str | None] = mapped_column(String(60))
+
+    __table_args__ = (
+        CheckConstraint("(weekday IS NOT NULL) <> (date IS NOT NULL)", name="ck_timetable_day"),
+        CheckConstraint("weekday IS NULL OR weekday BETWEEN 0 AND 6", name="ck_timetable_weekday"),
+        Index("ix_timetable_group", "group_id", "weekday"),
+    )
+
+
+class PtmEvent(Base):
+    """A parent-teacher meeting session: parents of a batch book short slots with its teachers."""
+
+    __tablename__ = "ptm_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False, default="Parent-teacher meeting")
+    date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    start_time: Mapped[dt.time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[dt.time] = mapped_column(Time, nullable=False)
+    slot_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=10)
+    resource_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
+    broadcast_id: Mapped[int | None] = mapped_column(ForeignKey("broadcasts.id", ondelete="SET NULL"))
+    created_at: Mapped[dt.datetime] = _now_col()
+
+    __table_args__ = (
+        CheckConstraint("end_time > start_time", name="ck_ptm_events_range"),
+        CheckConstraint("slot_minutes BETWEEN 5 AND 60", name="ck_ptm_events_slot"),
+        Index("ix_ptm_events_group_date", "group_id", "date"),
+    )

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
 import type { Meta, Role, StaffMember } from "@/lib/types";
 import { Card, Empty, ErrorBox, Field, Modal, useAction, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 const COMMAND_LABELS: Record<string, string> = {
   today: "Today's list",
@@ -15,12 +16,17 @@ const COMMAND_LABELS: Record<string, string> = {
   followup: "Schedule follow-up",
   attendance: "Mark attendance",
   summary: "Summary",
-  find: "Find patient",
+  find: "Find a person",
   help: "Help",
+  announce: "Announce to own batches (PIN)",
+  announce_all: "Announce to any batch (PIN)",
+  absent: "Report absent students",
+  paid: "Record a fee payment",
 };
 
 export function StaffTab() {
   const { business } = useBusiness();
+  const v = useVocab();
   const staff = useLoad(() => api<StaffMember[]>(bpath(business, "/staff")), [business?.id]);
   const roles = useLoad(() => api<Role[]>(bpath(business, "/roles")), [business?.id]);
   const meta = useLoad(() => api<Meta>("/api/meta"), []);
@@ -33,7 +39,7 @@ export function StaffTab() {
     <div className="stack">
       <Card title="Staff on WhatsApp" actions={<button className="btn primary small" onClick={() => setEditing("new")}>Add staff</button>}>
         <p className="muted small">
-          Staff message the clinic&apos;s WhatsApp number from their own phones. WAM recognises them by number. Cancelling visits and
+          Staff message the {v.org}&apos;s WhatsApp number from their own phones. WAM recognises them by number. Cancelling visits and
           taking leave need &quot;YES&quot; plus their PIN; every action is in the audit log.
         </p>
         <ErrorBox error={staff.error || del.error} />

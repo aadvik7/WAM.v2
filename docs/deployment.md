@@ -88,6 +88,28 @@ Alternative: self-host it on the VPS with `docker compose --profile admin up -d`
 8. Test: send "hi" to the clinic number from your phone; then "Today's list" from a staff phone.
 9. Optional: add `ANTHROPIC_API_KEY` to `infra/.env` and re-run `./deploy.sh` to switch on the AI agent.
 
+### Setting up an institute instead
+
+Same steps, with these differences:
+
+1. **Businesses** → add the institute with type *Institute*. Starter plans (fee installments,
+   parent-teacher meeting) and roles (owner, coordinator, teacher, front desk) are created for you.
+2. **Setup → Teachers & hours**: add teachers who take parent-teacher meetings (subject, slot length). They
+   don't need weekly hours; each meeting adds its own hours.
+3. **Setup → Staff & roles**: every coordinator, teacher and front-desk person with their WhatsApp number,
+   role and PIN.
+4. **Uploads → Students**: import the student list (roll number, name, student phone, 1–2 parent phones,
+   batch). Then **Batches** → each batch → tick its teachers.
+5. **Uploads → Timetable**: the weekly timetable (batch, day, start, end, subject, teacher, room).
+6. **Doubts → Subjects**: in the WAM inbox create one team per subject (Settings → Teams), add that subject's
+   teachers as agents, and enter each team's number against the subject in WAM admin.
+7. **Setup → Plan templates → Fee installments**: amount per installment, number of installments, days
+   between them and how many days before the due date to remind.
+8. Submit the institute templates to Meta (`wam_announcement`, `wam_absence_alert`, `wam_test_result`,
+   `wam_fee_reminder`, plus the shared ones); see [whatsapp-templates.md](whatsapp-templates.md).
+9. Test: from a coordinator's phone send `Send to <batch>: test` and reply `YES <PIN>`; from a student's phone
+   send `Doubt: …` and check it lands with the right team.
+
 ## 6. Backups and monitoring
 
 ```bash

@@ -96,6 +96,19 @@ class ChatwootClient:
     async def add_labels(self, conversation_id: int, labels: list[str]) -> None:
         await self._request("POST", f"/conversations/{conversation_id}/labels", json={"labels": labels})
 
+    async def assign_team(self, conversation_id: int, team_id: int) -> None:
+        await self._request(
+            "POST", f"/conversations/{conversation_id}/assignments", json={"team_id": team_id}
+        )
+
+    async def list_messages(self, conversation_id: int, before: int | None = None) -> list[dict[str, Any]]:
+        """Latest messages of a conversation (each has a WhatsApp `status`: sent/delivered/read/failed)."""
+        params = {"before": before} if before else None
+        data = _unwrap(
+            await self._request("GET", f"/conversations/{conversation_id}/messages", params=params)
+        )
+        return data if isinstance(data, list) else []
+
     async def create_conversation(
         self,
         *,

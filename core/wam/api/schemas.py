@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -213,6 +214,9 @@ class LeaveIn(BaseModel):
 
 class TemplateIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    kind: Literal["visit", "payment"] = "visit"
+    amount: Decimal | None = Field(default=None, ge=0)
+    reminder_days_before: int | None = Field(default=None, ge=0, le=60)
     specialty: str | None = None
     session_count: int | None = Field(default=None, ge=1, le=200)
     gap_days: int = Field(default=7, ge=0, le=3650)
@@ -225,6 +229,9 @@ class TemplateIn(BaseModel):
 
 class TemplatePatch(BaseModel):
     name: str | None = None
+    kind: Literal["visit", "payment"] | None = None
+    amount: Decimal | None = Field(default=None, ge=0)
+    reminder_days_before: int | None = Field(default=None, ge=0, le=60)
     specialty: str | None = None
     session_count: int | None = Field(default=None, ge=1, le=200)
     ongoing: bool | None = None
@@ -264,6 +271,7 @@ class ContactPatch(BaseModel):
 
 class EnrolIn(BaseModel):
     template_id: int
+    amount: Decimal | None = Field(default=None, ge=0)
     resource_id: int | None = None
     anchor_date: dt.date | None = None
     sessions_done: int = Field(default=0, ge=0)
@@ -404,6 +412,9 @@ def template_out(t: ScheduleTemplate) -> dict[str, Any]:
         "duration_minutes": t.duration_minutes,
         "aliases": t.aliases,
         "is_active": t.is_active,
+        "kind": t.kind,
+        "amount": float(t.amount) if t.amount is not None else None,
+        "reminder_days_before": (t.reminder_rules or {}).get("days_before"),
     }
 
 
@@ -416,6 +427,7 @@ def contact_out(c: Contact, tz: str) -> dict[str, Any]:
         "id": c.id,
         "name": c.name,
         "phone": c.phone,
+        "roll": c.external_id,
         "guardian": (
             {"id": c.guardian.id, "name": c.guardian.name, "phone": c.guardian.phone} if c.guardian else None
         ),
@@ -439,6 +451,8 @@ def schedule_out(s: Schedule, tz: str) -> dict[str, Any]:
         "contact_name": s.contact.name if s.contact else None,
         "template_id": s.template_id,
         "template": s.template.name if s.template else None,
+        "kind": s.template.kind if s.template else "visit",
+        "amount": _amount(s),
         "resource_id": s.resource_id,
         "status": s.status,
         "anchor_date": s.anchor_date.isoformat(),
@@ -454,6 +468,14 @@ def schedule_out(s: Schedule, tz: str) -> dict[str, Any]:
         "created_at": iso_local(s.created_at, tz),
         "completed_at": iso_local(s.completed_at, tz),
     }
+
+
+def _amount(s: Schedule) -> float | None:
+    if s.amount is not None:
+        return float(s.amount)
+    if s.template is not None and s.template.amount is not None:
+        return float(s.template.amount)
+    return None
 
 
 def appointment_out(a: Appointment, tz: str) -> dict[str, Any]:

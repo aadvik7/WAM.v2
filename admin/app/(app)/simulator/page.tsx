@@ -6,14 +6,29 @@ import { bpath, useBusiness } from "@/lib/business";
 import { fmtTime } from "@/lib/format";
 import type { Message, StaffMember } from "@/lib/types";
 import { Card, ErrorBox, Field, toast, useAction } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
-const PATIENT_EXAMPLES = ["Hi", "What are your timings?", "What is the fee?", "I want to book an appointment", "2", "Can I come Thursday evening instead?", "My tooth is bleeding heavily", "STOP"];
-const STAFF_EXAMPLES = ["Today's list", "Rahul 9811111111, root canal", "Cancel my 5 pm", "YES 1234", "Running 20 min late", "On leave Friday", "Follow-up for Rahul in 7 days", "Summary", "help"];
+const EXAMPLES: Record<string, { person: string[]; staff: string[] }> = {
+  clinic: {
+    person: ["Hi", "What are your timings?", "What is the fee?", "I want to book an appointment", "2", "Can I come Thursday evening instead?", "My tooth is bleeding heavily", "STOP"],
+    staff: ["Today's list", "Rahul 9811111111, root canal", "Cancel my 5 pm", "YES 1234", "Running 20 min late", "On leave Friday", "Follow-up for Rahul in 7 days", "Summary", "help"],
+  },
+  institute: {
+    person: ["Hi", "What's my timetable tomorrow?", "Doubt: why is the acceleration zero at the top?", "When are the fees due?", "PTM", "1", "STOP"],
+    staff: ["My batches", "Send to NEET-A2: Tomorrow's class is at 4 PM", "YES 1234", "Absent NEET-A2 Physics: 12, 15", "Aarav paid", "Announcement status", "Today's list", "help"],
+  },
+  business: {
+    person: ["Hi", "What are your timings?", "What are your prices?", "I want to book", "2", "STOP"],
+    staff: ["Today's list", "Summary", "Cancel my 5 pm", "YES 1234", "Running 20 min late", "help"],
+  },
+};
 
 export default function SimulatorPage() {
   const { business } = useBusiness();
+  const v = useVocab();
+  const examples = EXAMPLES[business?.type || "clinic"] || EXAMPLES.clinic;
   const [phone, setPhone] = useState("9811111111");
-  const [name, setName] = useState("Test Patient");
+  const [name, setName] = useState(`Test ${v.Person}`);
   const [text, setText] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -67,13 +82,13 @@ export default function SimulatorPage() {
       <div className="page-head">
         <div>
           <h1>Simulator</h1>
-          <div className="muted">Chat with WAM as a patient or a staff member, without WhatsApp. Messages are real: bookings and plans are saved.</div>
+          <div className="muted">Chat with WAM as a {v.person} or a staff member, without WhatsApp. Messages are real: bookings and plans are saved.</div>
         </div>
         <button className="btn" disabled={tick.busy} onClick={() => void runTick()}>Run scheduler now</button>
       </div>
       <ErrorBox error={send.error || tick.error} />
-      <div className="grid grid-2" style={{ gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)" }}>
-        <Card title={isStaff ? "Chatting as staff" : "Chatting as a patient"}>
+      <div className="grid grid-wide">
+        <Card title={isStaff ? "Chatting as staff" : `Chatting as a ${v.person}`}>
           <div className="chat" ref={chatRef} style={{ minHeight: 360 }}>
             {messages.length === 0 && <div className="empty">Say hi to start.</div>}
             {messages.map((m) => (
@@ -112,7 +127,7 @@ export default function SimulatorPage() {
           </Card>
           <Card title="Try">
             <div className="row">
-              {(isStaff ? STAFF_EXAMPLES : PATIENT_EXAMPLES).map((ex) => (
+              {(isStaff ? examples.staff : examples.person).map((ex) => (
                 <button key={ex} className="btn small" disabled={send.busy} onClick={() => void submit(undefined, ex)}>{ex}</button>
               ))}
             </div>

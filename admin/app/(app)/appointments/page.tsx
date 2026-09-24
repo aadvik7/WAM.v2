@@ -8,6 +8,7 @@ import { addDays, fmtDate, fmtTime } from "@/lib/format";
 import type { Appointment, Resource } from "@/lib/types";
 import { AppointmentActions, BookModal } from "@/components/Booking";
 import { Card, Empty, ErrorBox, StatusBadge, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 function todayIn(tz: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -15,6 +16,7 @@ function todayIn(tz: string): string {
 
 export default function AppointmentsPage() {
   const { business } = useBusiness();
+  const v = useVocab();
   const [date, setDate] = useState(() => (business ? todayIn(business.timezone) : ""));
   const [resourceId, setResourceId] = useState<number | "">("");
   const [booking, setBooking] = useState(false);
@@ -40,7 +42,7 @@ export default function AppointmentsPage() {
           <strong>{fmtDate(date)}</strong>
           <span className="spacer" />
           <select value={resourceId} onChange={(e) => setResourceId(e.target.value ? Number(e.target.value) : "")} style={{ width: 200 }}>
-            <option value="">All doctors</option>
+            <option value="">All {v.resources}</option>
             {resources.data?.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
         </div>
@@ -48,7 +50,7 @@ export default function AppointmentsPage() {
         {!data ? <Empty>Loading…</Empty> : data.length === 0 ? <Empty>No appointments on this day.</Empty> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Time</th><th>Patient</th><th>Visit</th><th>Doctor</th><th>Status</th><th>Source</th><th /></tr></thead>
+              <thead><tr><th>Time</th><th>{v.Person}</th><th>{v.Visit}</th><th>{v.Resource}</th><th>Status</th><th>Source</th><th /></tr></thead>
               <tbody>
                 {data.map((a) => (
                   <tr key={a.id}>

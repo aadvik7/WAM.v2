@@ -171,7 +171,7 @@ async def handle_patient_message(
         contact.consent_at = clock.now()
 
     # 4. Deterministic quick replies
-    outcome = await _quick_replies(session, business, contact, text, norm)
+    outcome = await _quick_replies(session, business, contact, text, norm, conversation_id)
     if outcome is not None:
         return outcome
 
@@ -192,7 +192,12 @@ async def handle_patient_message(
 
 
 async def _quick_replies(
-    session: AsyncSession, business: Business, contact: Contact, text: str, norm: str
+    session: AsyncSession,
+    business: Business,
+    contact: Contact,
+    text: str,
+    norm: str,
+    conversation_id: int | None = None,
 ) -> PatientOutcome | None:
     tz = business.timezone
     # Picking an offered slot
@@ -253,6 +258,14 @@ async def _quick_replies(
         appt, reply = await book_from_offer(session, business, contact, choice)
         await _reply(session, business, contact, reply, "rule")
         return PatientOutcome("rule", 1)
+
+    # The pack's own quick replies (institute: doubts, PTM, timetable, fees)
+    hooks = get_pack(business.type).hook_module()
+    if hooks is not None:
+        pack_reply = await hooks.quick_reply(session, business, contact, text, norm, conversation_id)
+        if pack_reply is not None:
+            await _reply(session, business, contact, pack_reply.text, pack_reply.handled_by)
+            return PatientOutcome(pack_reply.handled_by, 1)
     return None
 
 

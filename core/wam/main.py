@@ -14,6 +14,7 @@ from wam.config import get_settings
 from wam.db import dispose_engine
 from wam.jobs.queue import close_pool
 from wam.logging_setup import setup_logging
+from wam.packs.institute import api as institute_api
 from wam.router import webhook
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(patients.router)
     app.include_router(reports.router)
     app.include_router(simulator.router)
+    app.include_router(institute_api.router)
     return app
 
 

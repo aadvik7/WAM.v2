@@ -44,6 +44,7 @@ from wam.models import (
     ScheduleStatus,
     ScheduleTemplate,
 )
+from wam.people import children_of, groups_of, parents_of
 from wam.phone import normalize_phone
 from wam.settings_defaults import get_setting
 from wam.windows import in_send_window
@@ -201,12 +202,14 @@ async def get_contact(contact_id: int, business: BusinessDep, session: SessionDe
         .scalars()
         .all()
     )
-    children = (
-        (await session.execute(select(Contact).where(Contact.guardian_id == c.id))).scalars().unique().all()
-    )
+    children = await children_of(session, c)
+    parents = [p for p in await parents_of(session, c) if p.id != c.guardian_id]
+    batches = await groups_of(session, [c.id])
     return {
         "contact": contact_out(c, tz),
         "children": [contact_out(k, tz) for k in children],
+        "parents": [{"id": p.id, "name": p.name, "phone": p.phone} for p in parents],
+        "batches": [{"id": g.id, "name": g.name} for g in batches],
         "schedules": [schedule_out(s, tz) for s in schedules],
         "appointments": [appointment_out(a, tz) for a in appts],
         "messages": [message_out(m, tz) for m in reversed(messages)],
@@ -309,6 +312,7 @@ async def enrol_contact(
             sessions_done=body.sessions_done,
             first_due=body.first_due,
             notes=body.notes,
+            amount=body.amount,
         )
     except ScheduleError as exc:
         raise bad_request(str(exc)) from exc
@@ -356,6 +360,28 @@ async def update_schedule(
         action="schedule_updated",
         admin_user_id=user.id,
         details={"schedule_id": s.id, "fields": sorted(body.model_dump(exclude_unset=True))},
+    )
+    return schedule_out(s, business.timezone)
+
+
+@router.post("/schedules/{schedule_id}/payment")
+async def record_payment(
+    schedule_id: int, business: BusinessDep, session: SessionDep, user: UserDep
+) -> dict[str, Any]:
+    """Record one paid installment of a fee plan."""
+    s = await session.get(Schedule, schedule_id)
+    if s is None or s.business_id != business.id:
+        raise not_found()
+    try:
+        await sched_engine.record_payment(session, s)
+    except ScheduleError as exc:
+        raise bad_request(str(exc)) from exc
+    await audit(
+        session,
+        business_id=business.id,
+        action="fee_paid",
+        admin_user_id=user.id,
+        details={"schedule_id": s.id, "installment": s.sessions_done},
     )
     return schedule_out(s, business.timezone)
 
@@ -560,8 +586,11 @@ async def today(business: BusinessDep, session: SessionDep) -> dict[str, Any]:
         .all()
     )
     due_unbooked = []
+    fees_due = []
     for s in due:
-        if await sched_engine.active_appointment_for_schedule(session, s.id) is None:
+        if s.template.kind == "payment":
+            fees_due.append(schedule_out(s, tz))
+        elif await sched_engine.active_appointment_for_schedule(session, s.id) is None:
             due_unbooked.append(schedule_out(s, tz))
     return {
         "date": day.isoformat(),
@@ -570,4 +599,5 @@ async def today(business: BusinessDep, session: SessionDep) -> dict[str, Any]:
         "counts": counts,
         "needs_staff": [contact_out(c, tz) for c in waiting],
         "due_unbooked": due_unbooked,
+        "fees_due": fees_due,
     }
