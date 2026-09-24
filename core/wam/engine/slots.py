@@ -73,14 +73,26 @@ def _overlaps(a: Interval, b: Interval) -> bool:
     return a[0] < b[1] and b[0] < a[1]
 
 
+def _merge(intervals: list[Interval]) -> list[Interval]:
+    out: list[Interval] = []
+    for s, e in sorted(intervals):
+        if out and s <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
 def working_intervals(
     day: dt.date,
     tz_name: str,
     weekly: Sequence[WeeklyBlock],
     breaks: Sequence[BreakBlock],
     leave: Sequence[Interval],
+    extra: Sequence[Interval] = (),
 ) -> list[Interval]:
-    """Open intervals (UTC) for one local day after removing breaks and leave."""
+    """Open intervals (UTC) for one local day: weekly hours minus breaks, plus one-off extra hours,
+    minus leave (leave always wins)."""
     zone = ZoneInfo(tz_name)
     wd = day.weekday()
     intervals: list[Interval] = []
@@ -98,6 +110,14 @@ def working_intervals(
         bs = dt.datetime.combine(day, br.start, tzinfo=zone).astimezone(dt.UTC)
         be = dt.datetime.combine(day, br.end, tzinfo=zone).astimezone(dt.UTC)
         intervals = _subtract(intervals, (bs, be))
+    if extra:
+        day_start = dt.datetime.combine(day, dt.time(0), tzinfo=zone).astimezone(dt.UTC)
+        day_end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0), tzinfo=zone).astimezone(dt.UTC)
+        for es, ee in extra:
+            s, e = max(es, day_start), min(ee, day_end)
+            if e > s:
+                intervals.append((s, e))
+        intervals = _merge(intervals)
     for lv in leave:
         intervals = _subtract(intervals, lv)
     return intervals
@@ -117,6 +137,8 @@ def compute_free_slots(
     busy: Sequence[Interval],
     earliest: dt.datetime,
     limit: int | None = None,
+    extra: Sequence[Interval] = (),
+    step_minutes: int | None = None,
 ) -> list[Slot]:
     """All free slots for one resource between two local dates (inclusive).
 
@@ -124,13 +146,13 @@ def compute_free_slots(
     (defaults to slot_minutes). A slot must fit inside one open interval, must not overlap a busy
     interval and must start at or after `earliest`.
     """
-    step = dt.timedelta(minutes=slot_minutes)
+    step = dt.timedelta(minutes=step_minutes or slot_minutes)
     length = dt.timedelta(minutes=duration_minutes or slot_minutes)
     busy_sorted = sorted(busy)
     slots: list[Slot] = []
     day = date_from
     while day <= date_to:
-        for open_start, open_end in working_intervals(day, tz_name, weekly, breaks, leave):
+        for open_start, open_end in working_intervals(day, tz_name, weekly, breaks, leave, extra):
             # Grid anchored at the start of the weekly block (not at a break end) keeps times tidy.
             cursor = open_start
             while cursor + length <= open_end:
@@ -186,7 +208,7 @@ def pick_spread(slots: Sequence[Slot], count: int, tz_name: str) -> list[Slot]:
 
 async def load_availability(
     session: AsyncSession, resource_id: int, window: Interval
-) -> tuple[list[WeeklyBlock], list[BreakBlock], list[Interval]]:
+) -> tuple[list[WeeklyBlock], list[BreakBlock], list[Interval], list[Interval]]:
     rows = (
         (await session.execute(select(Availability).where(Availability.resource_id == resource_id)))
         .scalars()
@@ -195,15 +217,16 @@ async def load_availability(
     weekly: list[WeeklyBlock] = []
     breaks: list[BreakBlock] = []
     leave: list[Interval] = []
+    extra: list[Interval] = []
     for row in rows:
         if row.kind == "weekly" and row.weekday is not None and row.start_time and row.end_time:
             weekly.append(WeeklyBlock(row.weekday, row.start_time, row.end_time))
         elif row.kind == "break" and row.start_time and row.end_time:
             breaks.append(BreakBlock(row.weekday, row.start_time, row.end_time))
-        elif row.kind == "leave" and row.start_at and row.end_at:
+        elif row.kind in ("leave", "extra") and row.start_at and row.end_at:
             if _overlaps((row.start_at, row.end_at), window):
-                leave.append((row.start_at, row.end_at))
-    return weekly, breaks, leave
+                (leave if row.kind == "leave" else extra).append((row.start_at, row.end_at))
+    return weekly, breaks, leave, extra
 
 
 async def load_busy(
@@ -238,6 +261,7 @@ async def find_free_slots(
     duration_minutes: int | None = None,
     limit: int | None = None,
     exclude_appointment_id: int | None = None,
+    step_minutes: int | None = None,
 ) -> list[Slot]:
     horizon = int(get_setting(business.settings, "booking_horizon_days"))
     today = clock.local_today(business.timezone)
@@ -249,7 +273,7 @@ async def find_free_slots(
         clock.day_bounds(date_from, business.timezone)[0],
         clock.day_bounds(date_to, business.timezone)[1],
     )
-    weekly, breaks, leave = await load_availability(session, resource.id, window)
+    weekly, breaks, leave, extra = await load_availability(session, resource.id, window)
     busy = await load_busy(session, resource.id, window, exclude_appointment_id)
     return compute_free_slots(
         resource_id=resource.id,
@@ -264,6 +288,8 @@ async def find_free_slots(
         busy=busy,
         earliest=earliest_bookable(business),
         limit=limit,
+        extra=extra,
+        step_minutes=step_minutes,
     )
 
 

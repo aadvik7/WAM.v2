@@ -5,14 +5,17 @@ import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
-import { fmtDate, fmtDateTime, fmtTime, planProgress } from "@/lib/format";
+import { fmtDate, fmtDateTime, fmtTime, inr, planProgress } from "@/lib/format";
 import type { Appointment, Contact, Message, Resource, Schedule, Template } from "@/lib/types";
+import { useVocab } from "@/lib/vocab";
 import { AppointmentActions, BookModal } from "@/components/Booking";
-import { Card, Empty, ErrorBox, Field, Modal, StatusBadge, useAction, useLoad } from "@/components/ui";
+import { Card, Empty, ErrorBox, Field, Modal, StatusBadge, toast, useAction, useLoad } from "@/components/ui";
 
 interface Detail {
   contact: Contact;
   children: Contact[];
+  parents: { id: number; name: string | null; phone: string | null }[];
+  batches: { id: number; name: string }[];
   schedules: Schedule[];
   appointments: Appointment[];
   messages: Message[];
@@ -22,6 +25,8 @@ export default function PatientPage() {
   const { id } = useParams<{ id: string }>();
   const { business } = useBusiness();
   const router = useRouter();
+  const v = useVocab();
+  const institute = business?.type === "institute";
   const { data, error, reload } = useLoad(() => api<Detail>(bpath(business, `/contacts/${id}`)), [business?.id, id]);
   const [enrolling, setEnrolling] = useState(false);
   const [booking, setBooking] = useState<Schedule | null | false>(false);
@@ -35,6 +40,18 @@ export default function PatientPage() {
   const upcoming = data.appointments.filter((a) => a.status === "booked" || a.status === "confirmed").reverse();
   const past = data.appointments.filter((a) => !(a.status === "booked" || a.status === "confirmed"));
 
+  async function nudge(s: Schedule) {
+    const r = await action.run(() => api<{ sent: boolean }>(bpath(business, `/schedules/${s.id}/nudge`), { method: "POST" }));
+    if (r) {
+      toast(
+        r.sent
+          ? s.kind === "payment" ? "Fee reminder sent on WhatsApp" : "Slots sent on WhatsApp"
+          : s.kind === "payment" ? "Nothing sent: no one to message, or they opted out" : "Nothing sent: already booked, no free slots, or no number",
+      );
+      void reload();
+    }
+  }
+
   async function patchSchedule(s: Schedule, body: Record<string, unknown>, msg: string) {
     const ok = await action.run(() => api(bpath(business, `/schedules/${s.id}`), { method: "PATCH", body }), msg);
     if (ok) void reload();
@@ -44,12 +61,23 @@ export default function PatientPage() {
     <div className="stack">
       <div className="page-head">
         <div>
-          <div className="small"><Link href="/patients">← Patients</Link></div>
-          <h1>{c.name || "Unknown patient"}</h1>
+          <div className="small"><Link href="/patients">← {v.People}</Link></div>
+          <h1>{c.name || `Unknown ${v.person}`}</h1>
           <div className="muted">
+            {c.roll && `Roll ${c.roll} · `}
             {c.phone || (c.guardian ? `via ${c.guardian.name || "guardian"} ${c.guardian.phone}` : "no number")}
             {c.date_of_birth && ` · born ${fmtDate(c.date_of_birth)}`}
           </div>
+          {(data.parents.length > 0 || data.batches.length > 0) && (
+            <div className="small" style={{ marginTop: 4 }}>
+              {data.batches.map((g) => <Link key={g.id} href={`/institute/batches/${g.id}`} className="badge accent" style={{ marginRight: 6 }}>{g.name}</Link>)}
+              {data.parents.map((p) => (
+                <span key={p.id} style={{ marginRight: 10 }}>
+                  Parent: <Link href={`/patients/${p.id}`}>{p.name || p.phone}</Link>{p.name && p.phone ? <span className="muted"> {p.phone}</span> : null}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="row" style={{ marginTop: 6 }}>
             {c.needs_staff && <span className="badge warn">needs a person</span>}
             {c.opted_out && <span className="badge">opted out of messages</span>}
@@ -59,15 +87,15 @@ export default function PatientPage() {
         <div className="row">
           <button className="btn" onClick={() => setEditing(true)}>Edit</button>
           <button className="btn" onClick={() => setEnrolling(true)}>Start a plan</button>
-          <button className="btn primary" onClick={() => setBooking(null)}>Book visit</button>
+          <button className="btn primary" onClick={() => setBooking(null)}>Book {v.visit}</button>
         </div>
       </div>
       <ErrorBox error={action.error} />
       {c.notes && <div className="alert info">{c.notes}</div>}
 
-      <Card title="Treatment plans">
+      <Card title={business?.type === "clinic" ? "Treatment plans" : institute ? "Plans and fees" : "Plans"}>
         {data.schedules.length === 0 ? (
-          <Empty>No plans yet. Start one so WAM reminds {c.name || "the patient"} when each visit is due.</Empty>
+          <Empty>No plans yet. Start one so WAM reminds {c.name || `the ${v.person}`} when each {institute ? "session or fee" : v.visit} is due.</Empty>
         ) : (
           <div className="table-wrap">
             <table>
@@ -75,18 +103,32 @@ export default function PatientPage() {
               <tbody>
                 {data.schedules.map((s) => (
                   <tr key={s.id}>
-                    <td>{s.template}{s.notes && <div className="small muted">{s.notes}</div>}</td>
-                    <td>{planProgress(s.sessions_done, s.sessions_total)}{s.missed_count > 0 && <div className="small muted">{s.missed_count} missed in a row</div>}</td>
+                    <td>
+                      {s.template}
+                      {s.kind === "payment" && <div className="small">{s.amount ? `${inr(s.amount)} per installment` : <span className="badge info">fee plan</span>}</div>}
+                      {s.notes && <div className="small muted">{s.notes}</div>}
+                    </td>
+                    <td>{planProgress(s.sessions_done, s.sessions_total, s.kind)}{s.missed_count > 0 && <div className="small muted">{s.missed_count} missed in a row</div>}</td>
                     <td className="nowrap">
                       {s.next_due_date ? fmtDate(s.next_due_date) : "—"} {s.overdue && <span className="badge danger">overdue</span>}
                       {s.nudge_count > 0 && <div className="small muted">{s.nudge_count} reminder(s) sent</div>}
                     </td>
                     <td><StatusBadge status={s.status} /> {s.needs_staff && <span className="badge warn">call</span>}</td>
                     <td className="actions">
-                      {s.status === "active" && (
+                      {s.status === "active" && s.kind === "payment" && (
+                        <>
+                          <button className="btn small primary" disabled={action.busy} onClick={() => void action.run(() => api(bpath(business, `/schedules/${s.id}/payment`), { method: "POST" }), "Payment recorded").then(() => reload())}>Record payment</button>{" "}
+                          <button className="btn small" disabled={action.busy} onClick={() => void nudge(s)}>Send reminder</button>{" "}
+                        </>
+                      )}
+                      {s.status === "active" && s.kind !== "payment" && (
                         <>
                           <button className="btn small" onClick={() => setBooking(s)}>Book</button>{" "}
-                          <button className="btn small" disabled={action.busy} onClick={() => void action.run(() => api(bpath(business, `/schedules/${s.id}/nudge`), { method: "POST" }), "Slots sent on WhatsApp").then(() => reload())}>Send slots</button>{" "}
+                          <button className="btn small" disabled={action.busy} onClick={() => void nudge(s)}>Send slots</button>{" "}
+                        </>
+                      )}
+                      {s.status === "active" && (
+                        <>
                           <DueEditor schedule={s} onSave={(d) => void patchSchedule(s, { next_due_date: d }, "Next due date updated")} />{" "}
                           <button className="btn small" onClick={() => void patchSchedule(s, { status: "paused" }, "Plan paused")}>Pause</button>{" "}
                           <button className="btn small danger" onClick={() => void patchSchedule(s, { status: "cancelled" }, "Plan stopped")}>Stop</button>
@@ -103,7 +145,7 @@ export default function PatientPage() {
       </Card>
 
       <div className="grid grid-2">
-        <Card title="Upcoming visits">
+        <Card title={`Upcoming ${v.visits}`}>
           {upcoming.length === 0 ? <Empty>Nothing booked.</Empty> : (
             <table>
               <tbody>
@@ -119,8 +161,8 @@ export default function PatientPage() {
             </table>
           )}
         </Card>
-        <Card title="Past visits">
-          {past.length === 0 ? <Empty>No past visits.</Empty> : (
+        <Card title={`Past ${v.visits}`}>
+          {past.length === 0 ? <Empty>No past {v.visits}.</Empty> : (
             <table>
               <tbody>
                 {past.slice(0, 20).map((a) => (
@@ -138,7 +180,7 @@ export default function PatientPage() {
       </div>
 
       {data.children.length > 0 && (
-        <Card title="Children reached through this number">
+        <Card title={institute ? "Children" : "Children reached through this number"}>
           <div className="row">{data.children.map((k) => <Link key={k.id} href={`/patients/${k.id}`} className="badge accent">{k.name}</Link>)}</div>
         </Card>
       )}
@@ -163,8 +205,8 @@ export default function PatientPage() {
       </Card>
 
       <Card title="Data">
-        <p className="muted small">Erase this patient and all their messages, plans and visits (DPDP right to erasure). This can&apos;t be undone.</p>
-        <button className="btn danger" onClick={() => setErasing(true)}>Erase patient data</button>
+        <p className="muted small">Erase this {v.person} and all their messages, plans and {v.visits} (DPDP right to erasure). This can&apos;t be undone.</p>
+        <button className="btn danger" onClick={() => setErasing(true)}>Erase {v.person} data</button>
       </Card>
 
       {enrolling && <EnrolModal contact={c} onClose={() => setEnrolling(false)} onDone={() => { setEnrolling(false); void reload(); }} />}
@@ -173,11 +215,11 @@ export default function PatientPage() {
       )}
       {editing && <EditContact contact={c} onClose={() => setEditing(false)} onDone={() => { setEditing(false); void reload(); }} />}
       {erasing && (
-        <Modal title="Erase this patient?" onClose={() => setErasing(false)}>
-          <p>All of {c.name || "this patient"}&apos;s data will be deleted permanently.</p>
+        <Modal title={`Erase this ${v.person}?`} onClose={() => setErasing(false)}>
+          <p>All of {c.name || `this ${v.person}`}&apos;s data will be deleted permanently.</p>
           <div className="form-actions">
             <button className="btn" onClick={() => setErasing(false)}>Keep</button>
-            <button className="btn danger" disabled={action.busy} onClick={() => void action.run(async () => { await api(bpath(business, `/contacts/${c.id}`), { method: "DELETE" }); return true; }, "Patient erased").then((r) => r && router.push("/patients"))}>Erase</button>
+            <button className="btn danger" disabled={action.busy} onClick={() => void action.run(async () => { await api(bpath(business, `/contacts/${c.id}`), { method: "DELETE" }); return true; }, `${v.Person} erased`).then((r) => r && router.push("/patients"))}>Erase</button>
           </div>
         </Modal>
       )}
@@ -200,6 +242,7 @@ function DueEditor({ schedule, onSave }: { schedule: Schedule; onSave: (date: st
 
 function EnrolModal({ contact, onClose, onDone }: { contact: Contact; onClose: () => void; onDone: () => void }) {
   const { business } = useBusiness();
+  const v = useVocab();
   const templates = useLoad(() => api<Template[]>(bpath(business, "/templates")), [business?.id]);
   const resources = useLoad(() => api<Resource[]>(bpath(business, "/resources")), [business?.id]);
   const [templateId, setTemplateId] = useState<number | "">("");
@@ -207,9 +250,26 @@ function EnrolModal({ contact, onClose, onDone }: { contact: Contact; onClose: (
   const [done, setDone] = useState(0);
   const [anchor, setAnchor] = useState(contact.date_of_birth || "");
   const [firstDue, setFirstDue] = useState("");
+  const [amount, setAmount] = useState<number | "">("");
   const [nudge, setNudge] = useState(true);
   const { busy, error, run } = useAction();
   const tpl = templates.data?.find((t) => t.id === templateId);
+  const payment = tpl?.kind === "payment";
+
+  function pick(id: number) {
+    setTemplateId(id);
+    const t = templates.data?.find((x) => x.id === id);
+    setAmount(t?.amount ?? "");
+  }
+
+  function describe(t: Template): string {
+    if (t.kind === "payment") {
+      const each = t.amount ? ` of ${inr(t.amount)}` : "";
+      return t.session_count ? `${t.session_count} installments${each}, every ${t.gap_days} days` : `fee every ${t.gap_days} days${each}`;
+    }
+    if (t.offsets_days) return "age-based schedule";
+    return t.session_count ? `${t.session_count} ${v.visits}, ${t.gap_days} days apart` : `every ${t.gap_days} days`;
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -219,11 +279,12 @@ function EnrolModal({ contact, onClose, onDone }: { contact: Contact; onClose: (
           method: "POST",
           body: {
             template_id: templateId,
-            resource_id: resourceId || null,
+            resource_id: payment ? null : resourceId || null,
             sessions_done: done,
             anchor_date: anchor || null,
             first_due: firstDue || null,
             nudge_now: nudge,
+            amount: payment && amount !== "" ? amount : null,
           },
         }),
       "Plan started",
@@ -232,36 +293,48 @@ function EnrolModal({ contact, onClose, onDone }: { contact: Contact; onClose: (
   }
 
   return (
-    <Modal title={`Start a plan for ${contact.name || "patient"}`} onClose={onClose}>
+    <Modal title={`Start a plan for ${contact.name || v.person}`} onClose={onClose}>
       <form onSubmit={save}>
         <ErrorBox error={error} />
         <div className="stack" style={{ gap: 12 }}>
           <Field label="Plan">
-            <select value={templateId} onChange={(e) => setTemplateId(Number(e.target.value))} required>
+            <select value={templateId} onChange={(e) => pick(Number(e.target.value))} required>
               <option value="">Choose…</option>
               {templates.data?.filter((t) => t.is_active).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} — {t.offsets_days ? "age-based schedule" : t.session_count ? `${t.session_count} visits, ${t.gap_days} days apart` : `every ${t.gap_days} days`}
-                </option>
+                <option key={t.id} value={t.id}>{t.name} — {describe(t)}</option>
               ))}
             </select>
           </Field>
-          <Field label="Doctor (optional)">
-            <select value={resourceId} onChange={(e) => setResourceId(e.target.value ? Number(e.target.value) : "")}>
-              <option value="">Any matching doctor</option>
-              {resources.data?.filter((r) => r.is_active).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-            </select>
-          </Field>
+          {payment ? (
+            <Field label="Amount per installment (₹)" hint="Shown in the reminders. Leave empty to leave it out.">
+              <input type="number" min={0} step="any" value={amount} onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))} />
+            </Field>
+          ) : (
+            <Field label={`${v.Resource} (optional)`}>
+              <select value={resourceId} onChange={(e) => setResourceId(e.target.value ? Number(e.target.value) : "")}>
+                <option value="">Any matching {v.resource}</option>
+                {resources.data?.filter((r) => r.is_active).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </Field>
+          )}
           {tpl?.offsets_days ? (
             <Field label="Date of birth" hint="Visits are due at fixed ages from this date. Doses long past are skipped automatically by staff commands; set 'visits already done' here.">
               <input type="date" value={anchor} onChange={(e) => setAnchor(e.target.value)} required />
             </Field>
           ) : null}
           <div className="form-grid">
-            <Field label="Visits already done"><input type="number" min={0} value={done} onChange={(e) => setDone(Number(e.target.value))} /></Field>
-            <Field label="Next visit due (optional)" hint="Default: today, or gap after today if visits are done."><input type="date" value={firstDue} onChange={(e) => setFirstDue(e.target.value)} /></Field>
+            <Field label={payment ? "Installments already paid" : `${v.Visits} already done`}><input type="number" min={0} value={done} onChange={(e) => setDone(Number(e.target.value))} /></Field>
+            <Field
+              label={payment ? "Next installment due" : `Next ${v.visit} due (optional)`}
+              hint={payment ? "Later installments fall due every gap after this date. Default: today." : "Default: today, or gap after today if visits are done."}
+            >
+              <input type="date" value={firstDue} onChange={(e) => setFirstDue(e.target.value)} />
+            </Field>
           </div>
-          <label className="check"><input type="checkbox" checked={nudge} onChange={(e) => setNudge(e.target.checked)} /> If due now, send free slots on WhatsApp right away</label>
+          <label className="check">
+            <input type="checkbox" checked={nudge} onChange={(e) => setNudge(e.target.checked)} />{" "}
+            {payment ? "If due now, send the fee reminder on WhatsApp right away" : "If due now, send free slots on WhatsApp right away"}
+          </label>
         </div>
         <div className="form-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -297,7 +370,7 @@ function EditContact({ contact, onClose, onDone }: { contact: Contact; onClose: 
     if (ok) onDone();
   }
   return (
-    <Modal title="Edit patient" onClose={onClose}>
+    <Modal title={`Edit ${contact.name || "details"}`} onClose={onClose}>
       <form onSubmit={save}>
         <ErrorBox error={error} />
         <div className="stack" style={{ gap: 12 }}>

@@ -29,7 +29,7 @@ DEFAULT_BUSINESS_SETTINGS: dict[str, Any] = {
     "privacy_url": "",
     "consent_text": (
         "Hi! This is the official WhatsApp assistant of {business}. We use your number and messages only to "
-        "manage your visits and reminders. We never sell your data or use it for ads. Privacy policy: "
+        "manage your bookings, reminders and updates. We never sell your data or use it for ads. Privacy policy: "
         "{privacy_url}. Reply STOP anytime to stop messages."
     ),
     # Emergency words (lowercase) that trigger an instant handoff, in addition to the built-in list

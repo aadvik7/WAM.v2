@@ -112,23 +112,37 @@ def allowed(staff: Staff, key: str) -> bool:
     return "*" in commands or key in commands or (key == "find" and "today" in commands)
 
 
+def _parse(ctx: Ctx, text: str) -> Command | None:
+    """The pack's own commands first (so '… 10 min late' inside an announcement isn't 'running late')."""
+    hooks = ctx.pack.hook_module()
+    if hooks is not None:
+        cmd = hooks.parse_staff(text)
+        if cmd is not None:
+            return cmd
+    return parse_command(text, ctx.templates, ctx.resources)
+
+
 async def handle_staff_message(session: AsyncSession, business: Business, staff: Staff, text: str) -> str:
     ctx = Ctx(session, business, staff)
     await ctx.load()
-    cmd = parse_command(text, ctx.templates, ctx.resources)
+    hooks = ctx.pack.hook_module()
+    cmd = _parse(ctx, text)
     if cmd is None and ai_available(business):
-        rewritten = await _ai_rewrite(business, text)
+        rewritten = await _ai_rewrite(business, text, getattr(hooks, "REWRITE_FORMS", ""))
         if rewritten:
-            cmd = parse_command(rewritten, ctx.templates, ctx.resources)
+            cmd = _parse(ctx, rewritten)
     if cmd is None:
         await ctx.reply("Sorry, I didn't get that. Reply HELP to see what I can do.")
         return "rule"
-    if not allowed(staff, cmd.key):
+    permission = getattr(hooks, "PERMISSION", {}).get(cmd.key, cmd.key) if hooks is not None else cmd.key
+    if not allowed(staff, permission):
         await ctx.reply("Sorry, your role can't do that. Ask the owner to change it in WAM admin.")
         await ctx.audit("command_denied", {"command": cmd.key, "text": text[:200]})
         return "rule"
-    handler = HANDLERS[cmd.key]
-    await handler(ctx, cmd)
+    if cmd.key in HANDLERS:
+        await HANDLERS[cmd.key](ctx, cmd)
+    elif hooks is None or not await hooks.handle_staff(ctx, cmd):
+        await ctx.reply("Sorry, I didn't get that. Reply HELP to see what I can do.")
     return "rule"
 
 
@@ -138,7 +152,8 @@ async def handle_staff_message(session: AsyncSession, business: Business, staff:
 
 
 async def cmd_help(ctx: Ctx, cmd: Command) -> None:
-    await ctx.reply(HELP_TEXT)
+    hooks = ctx.pack.hook_module()
+    await ctx.reply(getattr(hooks, "HELP_TEXT", HELP_TEXT) if hooks is not None else HELP_TEXT)
 
 
 def _status_mark(status: str) -> str:
@@ -353,7 +368,10 @@ async def cmd_attendance(ctx: Ctx, cmd: Command) -> None:
 # --------------------------------------------------------------------------------------
 
 
-async def _ask_confirmation(ctx: Ctx, action: str, payload: dict[str, Any], summary: str) -> None:
+async def ask_confirmation(
+    ctx: Ctx, action: str, payload: dict[str, Any], summary: str, *, prompt: str | None = None
+) -> None:
+    """Park an action until the staff member replies 'YES <PIN>'."""
     if not ctx.staff.pin_hash:
         await ctx.reply(
             "This needs your PIN, but you don't have one yet. Ask the owner to set it in WAM admin."
@@ -380,7 +398,7 @@ async def _ask_confirmation(ctx: Ctx, action: str, payload: dict[str, Any], summ
     )
     await ctx.session.flush()
     await ctx.reply(
-        f"{summary}?\nReply YES and your PIN (e.g. YES 1234) within 10 minutes to confirm, or NO."
+        prompt or f"{summary}?\nReply YES and your PIN (e.g. YES 1234) within 10 minutes to confirm, or NO."
     )
 
 
@@ -440,7 +458,7 @@ async def cmd_cancel(ctx: Ctx, cmd: Command) -> None:
     appt = candidates[0]
     who = appt.contact.name or appt.contact.phone or "the patient"
     summary = f"Cancel {who}'s {clock.fmt_slot(appt.start_at, ctx.tz)} visit with {appt.resource.name} and offer 3 new slots"
-    await _ask_confirmation(ctx, "cancel", {"appointment_id": appt.id}, summary)
+    await ask_confirmation(ctx, "cancel", {"appointment_id": appt.id}, summary)
 
 
 async def cmd_leave(ctx: Ctx, cmd: Command) -> None:
@@ -480,7 +498,7 @@ async def cmd_leave(ctx: Ctx, cmd: Command) -> None:
     )
     customers = ctx.pack.word("customers")
     summary = f"Block {resource.name} on {days} and move {affected} booked {customers}"
-    await _ask_confirmation(
+    await ask_confirmation(
         ctx,
         "leave",
         {"resource_id": resource.id, "start": start_day.isoformat(), "end": end_day.isoformat()},
@@ -554,7 +572,9 @@ async def cmd_confirm(ctx: Ctx, cmd: Command) -> None:
     elif pending.action == "leave":
         await _do_leave(ctx, pending.payload)
     else:
-        await ctx.reply("Unknown action.")
+        hooks = ctx.pack.hook_module()
+        if hooks is None or not await hooks.execute_pending(ctx, pending):
+            await ctx.reply("Unknown action.")
 
 
 async def _do_cancel(ctx: Ctx, payload: dict[str, Any]) -> None:
@@ -793,9 +813,17 @@ async def cmd_enrol(ctx: Ctx, cmd: Command) -> None:
     )
     who = contact.name or contact.phone or "the patient"
     total = sched_engine.total_sessions(template)
-    plan_desc = template.name if total is None else f"{template.name} ({total} visits)"
+    unit = "installments" if template.kind == "payment" else "visits"
+    plan_desc = template.name if total is None else f"{template.name} ({total} {unit})"
     next_label = plan_label(template, schedule.sessions_done + 1)
-    if (
+    if template.kind == "payment":
+        due = clock.fmt_date(schedule.next_due_date) if schedule.next_due_date else "-"
+        days = int((template.reminder_rules or {}).get("days_before", 3))
+        await ctx.reply(
+            f"Enrolled {who} in {plan_desc}. {next_label} is due {due}; I'll remind the family {days} days "
+            "before each due date. Send '<name> paid' when an installment is paid."
+        )
+    elif (
         schedule.next_due_date is not None
         and schedule.next_due_date <= ctx.today
         and not in_send_window(ctx.business)
@@ -920,16 +948,20 @@ Canonical forms:
 - follow-up for <patient name> in <N> days | follow-up for <patient name> on <date>
 - find <patient name>
 - help
-Never invent names, numbers, PINs or dates that are not in the message. Never output YES."""
+Never invent names, numbers, PINs or dates that are not in the message. Never output YES.
+Copy any announcement text word for word."""
 
 
-async def _ai_rewrite(business: Business, text: str) -> str | None:
+async def _ai_rewrite(business: Business, text: str, extra_forms: str = "") -> str | None:
+    system = _REWRITE_PROMPT
+    if extra_forms:
+        system = system.replace("- help\n", "- help\n" + extra_forms.rstrip() + "\n", 1)
     try:
         client = get_llm_client()
         response = await client.messages.create(
             model=get_settings().ai_model,
-            max_tokens=100,
-            system=_REWRITE_PROMPT,
+            max_tokens=300,
+            system=system,
             messages=[{"role": "user", "content": text[:500]}],
         )
     except Exception as exc:  # AI is optional here
@@ -940,4 +972,4 @@ async def _ai_rewrite(business: Business, text: str) -> str | None:
     ).strip()
     if not out or out.upper().startswith("UNKNOWN") or out.lower().startswith("yes"):
         return None
-    return out.splitlines()[0][:200]
+    return " ".join(line.strip() for line in out.splitlines() if line.strip())[:900]

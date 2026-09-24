@@ -19,6 +19,7 @@ from wam.config import get_settings
 from wam.db import session_scope
 from wam.jobs.queue import enqueue
 from wam.models import Business, Contact
+from wam.packs import get_pack
 from wam.phone import normalize_phone
 from wam.router.inbound import Inbound, process_inbound_safely, record_inbound
 
@@ -116,6 +117,10 @@ async def handle_conversation_event(payload: dict[str, Any], raw: bytes, request
                 )
             )
         ).scalar_one_or_none()
+        if contact is not None:
+            hooks = get_pack(business.type).hook_module()
+            if hooks is not None:
+                await hooks.on_conversation_resolved(session, business, contact)
         if contact is not None and contact.needs_staff:
             contact.needs_staff = False
             return {"ok": True, "handoff_cleared": True}

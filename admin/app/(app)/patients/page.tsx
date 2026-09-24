@@ -8,9 +8,11 @@ import { bpath, useBusiness } from "@/lib/business";
 import { fmtDate } from "@/lib/format";
 import type { Contact } from "@/lib/types";
 import { Card, Empty, ErrorBox, Field, Modal, useAction, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 export default function PatientsPage() {
   const { business } = useBusiness();
+  const v = useVocab();
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [waiting, setWaiting] = useState(false);
@@ -36,21 +38,21 @@ export default function PatientsPage() {
   return (
     <div className="stack">
       <div className="page-head">
-        <h1>Patients</h1>
-        <button className="btn primary" onClick={() => setAdding(true)}>Add patient</button>
+        <h1>{v.People}</h1>
+        <button className="btn primary" onClick={() => setAdding(true)}>Add {v.person}</button>
       </div>
       <Card>
         <div className="row" style={{ marginBottom: 12 }}>
           <input style={{ maxWidth: 320 }} placeholder="Search by name or phone" value={q} onChange={(e) => setQ(e.target.value)} />
           <label className="check"><input type="checkbox" checked={waiting} onChange={(e) => setWaiting(e.target.checked)} /> Needs a person</label>
           <span className="spacer" />
-          <span className="muted small">{data ? `${data.total} patients` : ""}</span>
+          <span className="muted small">{data ? `${data.total} ${v.people}` : ""}</span>
         </div>
         <ErrorBox error={error} />
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.items.length === 0 ? (
-          <Empty>No patients found.</Empty>
+          <Empty>No {v.people} found.</Empty>
         ) : (
           <div className="table-wrap">
             <table>
@@ -88,6 +90,7 @@ export default function PatientsPage() {
 
 function AddPatient({ onClose }: { onClose: () => void }) {
   const { business } = useBusiness();
+  const v = useVocab();
   const router = useRouter();
   const [form, setForm] = useState({ name: "", phone: "", child: false, guardian_phone: "", guardian_name: "", date_of_birth: "", notes: "" });
   const { busy, error, run } = useAction();
@@ -103,12 +106,12 @@ function AddPatient({ onClose }: { onClose: () => void }) {
       date_of_birth: form.date_of_birth || null,
       notes: form.notes || null,
     };
-    const created = await run(() => api<Contact>(bpath(business, "/contacts"), { method: "POST", body }), "Patient added");
+    const created = await run(() => api<Contact>(bpath(business, "/contacts"), { method: "POST", body }), `${v.Person} added`);
     if (created) router.push(`/patients/${created.id}`);
   }
 
   return (
-    <Modal title="Add patient" onClose={onClose}>
+    <Modal title={`Add ${v.person}`} onClose={onClose}>
       <form onSubmit={save}>
         <ErrorBox error={error} />
         <div className="stack" style={{ gap: 12 }}>
@@ -131,7 +134,7 @@ function AddPatient({ onClose }: { onClose: () => void }) {
         </div>
         <div className="form-actions">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy}>{busy ? "Saving…" : "Add patient"}</button>
+          <button className="btn primary" disabled={busy}>{busy ? "Saving…" : `Add ${v.person}`}</button>
         </div>
       </form>
     </Modal>

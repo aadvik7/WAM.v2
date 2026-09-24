@@ -5,17 +5,33 @@ import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
 import type { Faq } from "@/lib/types";
 import { Card, Empty, ErrorBox, Field, Modal, useAction, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
-const SUGGESTIONS = [
-  { question: "What is the consultation fee?", keywords: "fee, fees, cost, price, charges, consultation" },
-  { question: "Do you accept cards and UPI?", keywords: "upi, card, payment, pay, gpay, paytm, cash" },
-  { question: "When will my reports be ready?", keywords: "report, reports, x-ray, xray, results" },
-  { question: "Is there parking?", keywords: "parking, park, car" },
-  { question: "Do you accept insurance?", keywords: "insurance, cashless, mediclaim, tpa" },
-];
+const SUGGESTIONS: Record<string, { question: string; keywords: string }[]> = {
+  clinic: [
+    { question: "What is the consultation fee?", keywords: "fee, fees, cost, price, charges, consultation" },
+    { question: "Do you accept cards and UPI?", keywords: "upi, card, payment, pay, gpay, paytm, cash" },
+    { question: "When will my reports be ready?", keywords: "report, reports, x-ray, xray, results" },
+    { question: "Is there parking?", keywords: "parking, park, car" },
+    { question: "Do you accept insurance?", keywords: "insurance, cashless, mediclaim, tpa" },
+  ],
+  institute: [
+    { question: "What is the course fee?", keywords: "fee, fees, cost, price, charges, course fee" },
+    { question: "How can I pay the fees?", keywords: "upi, card, payment, pay, gpay, paytm, cash, bank" },
+    { question: "Are there demo classes?", keywords: "demo, trial, free class" },
+    { question: "When do new batches start?", keywords: "new batch, admission, start, joining" },
+    { question: "Is study material included?", keywords: "material, notes, books, study material" },
+  ],
+  business: [
+    { question: "What are your prices?", keywords: "price, prices, rate, rates, cost, charges" },
+    { question: "Do you accept cards and UPI?", keywords: "upi, card, payment, pay, gpay, paytm, cash" },
+    { question: "Is there parking?", keywords: "parking, park, car" },
+  ],
+};
 
 export function FaqTab() {
   const { business } = useBusiness();
+  const v = useVocab();
   const { data, error, reload } = useLoad(() => api<Faq[]>(bpath(business, "/faqs")), [business?.id]);
   const [editing, setEditing] = useState<Partial<Faq> | null>(null);
   const del = useAction();
@@ -25,8 +41,8 @@ export function FaqTab() {
     <div className="stack">
       <Card title="FAQ" actions={<button className="btn primary small" onClick={() => setEditing({})}>Add question</button>}>
         <p className="muted small">
-          WAM answers fees, reports, payment and similar questions only from these answers (plus your hours and address). It never
-          gives medical advice. Keywords help match the way patients ask, e.g. &quot;kitna fees&quot;.
+          WAM answers fees, payment and similar questions only from these answers (plus your hours and address).
+          {business?.type === "clinic" && " It never gives medical advice."} Keywords help match the way {v.people} ask, e.g. &quot;kitna fees&quot;.
         </p>
         <ErrorBox error={error || del.error} />
         {!data ? <Empty>Loading…</Empty> : data.length === 0 ? <Empty>No questions yet — start with the suggestions below.</Empty> : (
@@ -50,7 +66,7 @@ export function FaqTab() {
       </Card>
       <Card title="Suggested questions">
         <div className="row">
-          {SUGGESTIONS.filter((s) => !existing.has(s.question.toLowerCase())).map((s) => (
+          {(SUGGESTIONS[business?.type || "clinic"] || SUGGESTIONS.clinic).filter((s) => !existing.has(s.question.toLowerCase())).map((s) => (
             <button key={s.question} className="btn small" onClick={() => setEditing({ question: s.question, answer: "", keywords: s.keywords.split(", ") })}>
               + {s.question}
             </button>

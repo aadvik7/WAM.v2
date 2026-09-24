@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useBusiness } from "@/lib/business";
 import { Card, ErrorBox, Field, useAction, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 interface Health {
   status: string;
@@ -12,6 +13,7 @@ interface Health {
 
 export function ConnectionTab() {
   const { business, reload } = useBusiness();
+  const v = useVocab();
   const [form, setForm] = useState({ chatwoot_account_id: "", chatwoot_inbox_id: "", chatwoot_api_token: "", chatwoot_bot_token: "", chatwoot_webhook_secret: "" });
   const { busy, error, run } = useAction();
   // /health answers 503 with details when something is wrong, so read the body either way.
@@ -81,7 +83,7 @@ export function ConnectionTab() {
           <li>Create an agent bot in Chatwoot with the webhook URL <span className="mono">https://&lt;core-host&gt;/webhooks/chatwoot/&lt;WEBHOOK_SECRET&gt;</span> and attach it to the inbox.</li>
           <li>Enter the account ID, inbox ID and tokens above.</li>
           <li>Submit the templates on the <a href="/templates">WhatsApp templates</a> page to Meta and wait for approval.</li>
-          <li>Send &quot;hi&quot; to the clinic number from your phone — WAM should answer within seconds.</li>
+          <li>Send &quot;hi&quot; to the {v.org} number from your phone — WAM should answer within seconds.</li>
         </ol>
       </Card>
       <Card title="System health" actions={<button className="btn small" onClick={() => void health.reload()}>Check again</button>}>

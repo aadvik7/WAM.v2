@@ -3,17 +3,27 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
+import { inr } from "@/lib/format";
 import type { Template } from "@/lib/types";
+import { useVocab, type Vocab } from "@/lib/vocab";
 import { Card, Empty, ErrorBox, Field, Modal, useAction, useLoad } from "@/components/ui";
 
-function describe(t: Template): string {
-  if (t.offsets_days) return `${t.offsets_days.length} visits at set ages (days from birth: ${t.offsets_days.join(", ")})`;
-  if (t.session_count) return `${t.session_count} visit${t.session_count > 1 ? "s" : ""}, ${t.gap_days} days apart`;
+function describe(t: Template, v: Vocab): string {
+  if (t.kind === "payment") {
+    const each = t.amount ? ` of ${inr(t.amount)}` : "";
+    if (t.offsets_days) return `${t.offsets_days.length} installments${each} on set days`;
+    if (t.session_count === 1) return `One payment${each}`;
+    if (t.session_count) return `${t.session_count} installments${each}, every ${t.gap_days} days`;
+    return `Every ${t.gap_days} days${t.amount ? `, ${inr(t.amount)}` : ""}`;
+  }
+  if (t.offsets_days) return `${t.offsets_days.length} ${v.visits} at set ages (days from birth: ${t.offsets_days.join(", ")})`;
+  if (t.session_count) return `${t.session_count} ${t.session_count > 1 ? v.visits : v.visit}, ${t.gap_days} days apart`;
   return `Ongoing, every ${t.gap_days} days`;
 }
 
 export function PlansTab() {
   const { business } = useBusiness();
+  const v = useVocab();
   const { data, error, reload } = useLoad(() => api<Template[]>(bpath(business, "/templates")), [business?.id]);
   const [editing, setEditing] = useState<Template | "new" | null>(null);
   const remove = useAction();
@@ -21,20 +31,25 @@ export function PlansTab() {
   return (
     <Card title="Plan templates" actions={<button className="btn primary small" onClick={() => setEditing("new")}>New template</button>}>
       <p className="muted small">
-        A plan is a series of due dates. WAM nudges the patient with free slots when each visit is due, reminds them the day
-        before, and follows up if they miss it. Staff can enrol patients by WhatsApp with any name or alias, e.g. &quot;Rahul, RCT&quot;.
+        A plan is a series of due dates. WAM nudges the {v.person} with free slots when each {v.visit} is due, reminds them the day
+        before, and follows up if they miss it. A fee plan reminds families before each installment is due instead. Staff can
+        enrol {v.people} by WhatsApp with any name or alias, e.g. &quot;{business?.type === "institute" ? "Aarav, fees" : "Rahul, RCT"}&quot;.
       </p>
       <ErrorBox error={error || remove.error} />
       {!data ? <Empty>Loading…</Empty> : (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Pattern</th><th>Visit length</th><th>WhatsApp aliases</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Name</th><th>Pattern</th><th>Length / reminder</th><th>WhatsApp aliases</th><th>Status</th><th /></tr></thead>
             <tbody>
               {data.map((t) => (
                 <tr key={t.id}>
                   <td>{t.name}<div className="small muted">{t.specialty}</div></td>
-                  <td>{describe(t)}</td>
-                  <td>{t.duration_minutes ? `${t.duration_minutes} min` : "doctor's slot"}</td>
+                  <td>{describe(t, v)}{t.kind === "payment" && <div><span className="badge info">fee plan</span></div>}</td>
+                  <td>
+                    {t.kind === "payment"
+                      ? `${t.reminder_days_before ?? 3} days before due`
+                      : t.duration_minutes ? `${t.duration_minutes} min` : `${v.resource}'s slot`}
+                  </td>
                   <td className="small">{t.aliases.join(", ") || "—"}</td>
                   <td>{t.is_active ? <span className="badge ok">active</span> : <span className="badge">hidden</span>}</td>
                   <td className="actions">
@@ -56,6 +71,9 @@ type Kind = "fixed" | "ongoing" | "ages";
 
 function TemplateForm({ template, onClose, onDone }: { template: Template | null; onClose: () => void; onDone: () => void }) {
   const { business } = useBusiness();
+  const v = useVocab();
+  const [planType, setPlanType] = useState<Template["kind"]>(template?.kind || "visit");
+  const payment = planType === "payment";
   const initialKind: Kind = template?.offsets_days ? "ages" : template && template.session_count === null ? "ongoing" : "fixed";
   const [kind, setKind] = useState<Kind>(initialKind);
   const [form, setForm] = useState({
@@ -68,6 +86,8 @@ function TemplateForm({ template, onClose, onDone }: { template: Template | null
     duration_minutes: template?.duration_minutes ?? "",
     aliases: (template?.aliases || []).join(", "),
     is_active: template?.is_active ?? true,
+    amount: template?.amount ?? "",
+    reminder_days_before: template?.reminder_days_before ?? 3,
   });
   const { busy, error, run, setError } = useAction();
 
@@ -92,7 +112,13 @@ function TemplateForm({ template, onClose, onDone }: { template: Template | null
       is_active: form.is_active,
       offsets_days: offsets,
       session_count: kind === "fixed" ? Number(form.session_count) : null,
+      kind: planType,
     };
+    if (payment) {
+      body.amount = form.amount === "" ? null : Number(form.amount);
+      body.reminder_days_before = Number(form.reminder_days_before);
+      body.duration_minutes = null;
+    }
     if (template && kind === "ongoing") body.ongoing = true;
     const ok = await run(
       () => api(bpath(business, template ? `/templates/${template.id}` : "/templates"), { method: template ? "PATCH" : "POST", body }),
@@ -108,25 +134,51 @@ function TemplateForm({ template, onClose, onDone }: { template: Template | null
         <div className="stack" style={{ gap: 12 }}>
           <div className="form-grid">
             <Field label="Name"><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-            <Field label="Specialty" hint="Matches doctors with the same specialty."><input value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
+            <Field label="Type">
+              <select value={planType} onChange={(e) => { setPlanType(e.target.value as Template["kind"]); if (e.target.value === "payment" && kind === "ages") setKind("fixed"); }}>
+                <option value="visit">{v.Visits} (bookings)</option>
+                <option value="payment">Fee installments (payments)</option>
+              </select>
+            </Field>
+            {!payment && (
+              <Field label="Specialty" hint={`Matches ${v.resources} with the same specialty.`}><input value={form.specialty} onChange={(e) => setForm({ ...form, specialty: e.target.value })} /></Field>
+            )}
           </div>
           <Field label="Pattern">
             <select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
-              <option value="fixed">Fixed number of visits (e.g. 3-sitting root canal)</option>
-              <option value="ongoing">Ongoing recall (e.g. cleaning every 6 months)</option>
-              <option value="ages">Set ages from date of birth (e.g. vaccinations)</option>
+              {payment ? (
+                <>
+                  <option value="fixed">Fixed number of installments (e.g. 4, monthly)</option>
+                  <option value="ongoing">Ongoing (e.g. a monthly fee)</option>
+                </>
+              ) : (
+                <>
+                  <option value="fixed">Fixed number of {v.visits} (e.g. 3-sitting root canal)</option>
+                  <option value="ongoing">Ongoing recall (e.g. cleaning every 6 months)</option>
+                  <option value="ages">Set ages from date of birth (e.g. vaccinations)</option>
+                </>
+              )}
             </select>
           </Field>
           <div className="form-grid">
-            {kind === "fixed" && <Field label="Number of visits"><input type="number" min={1} value={form.session_count} onChange={(e) => setForm({ ...form, session_count: Number(e.target.value) })} /></Field>}
-            {kind !== "ages" && <Field label="Days between visits"><input type="number" min={0} value={form.gap_days} onChange={(e) => setForm({ ...form, gap_days: Number(e.target.value) })} /></Field>}
-            <Field label="Visit length (minutes)" hint="Blank = the doctor's slot length."><input type="number" min={5} value={form.duration_minutes} onChange={(e) => setForm({ ...form, duration_minutes: e.target.value === "" ? "" : Number(e.target.value) })} /></Field>
+            {kind === "fixed" && <Field label={payment ? "Number of installments" : `Number of ${v.visits}`}><input type="number" min={1} value={form.session_count} onChange={(e) => setForm({ ...form, session_count: Number(e.target.value) })} /></Field>}
+            {kind !== "ages" && <Field label={payment ? "Days between installments" : `Days between ${v.visits}`}><input type="number" min={payment ? 1 : 0} value={form.gap_days} onChange={(e) => setForm({ ...form, gap_days: Number(e.target.value) })} /></Field>}
+            {payment ? (
+              <>
+                <Field label="Amount per installment (₹)" hint="Can be changed per student when enrolling."><input type="number" min={0} step="any" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value === "" ? "" : Number(e.target.value) })} /></Field>
+                <Field label="Remind this many days before"><input type="number" min={0} max={60} value={form.reminder_days_before} onChange={(e) => setForm({ ...form, reminder_days_before: Number(e.target.value) })} /></Field>
+              </>
+            ) : (
+              <Field label={`${v.Visit} length (minutes)`} hint={`Blank = the ${v.resource}'s slot length.`}><input type="number" min={5} value={form.duration_minutes} onChange={(e) => setForm({ ...form, duration_minutes: e.target.value === "" ? "" : Number(e.target.value) })} /></Field>
+            )}
           </div>
           {kind === "ages" && (
             <Field label="Days from birth for each visit" hint="Comma separated, e.g. 0, 42, 70, 98"><input value={form.offsets} onChange={(e) => setForm({ ...form, offsets: e.target.value })} /></Field>
           )}
-          <Field label="Visit labels (optional)" hint="Comma separated, e.g. 1st sitting, 2nd sitting, 3rd sitting"><input value={form.labels} onChange={(e) => setForm({ ...form, labels: e.target.value })} /></Field>
-          <Field label="WhatsApp aliases" hint="Other names staff may type, e.g. rct, root canal treatment"><input value={form.aliases} onChange={(e) => setForm({ ...form, aliases: e.target.value })} /></Field>
+          {!payment && (
+            <Field label={`${v.Visit} labels (optional)`} hint="Comma separated, e.g. 1st sitting, 2nd sitting, 3rd sitting"><input value={form.labels} onChange={(e) => setForm({ ...form, labels: e.target.value })} /></Field>
+          )}
+          <Field label="WhatsApp aliases" hint={payment ? "Other names staff may type, e.g. fees, installment" : "Other names staff may type, e.g. rct, root canal treatment"}><input value={form.aliases} onChange={(e) => setForm({ ...form, aliases: e.target.value })} /></Field>
           <label className="check"><input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} /> Active</label>
         </div>
         <div className="form-actions">

@@ -63,27 +63,69 @@ const STATUS_TONE: Record<string, string> = {
   skipped: "warn",
   processed: "ok",
   received: "warn",
+  draft: "warn",
+  sending: "info",
+  sent: "ok",
+  queued: "",
+  delivered: "info",
+  read: "ok",
+  preview: "warn",
+  applied: "ok",
+  open: "warn",
+  closed: "ok",
 };
 
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
   return <span className={cls("badge", STATUS_TONE[status])}>{label || status.replace("_", " ")}</span>;
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // Focus the first control once, when the dialog opens (not on every parent re-render).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeRef.current();
     window.addEventListener("keydown", onKey);
     ref.current?.querySelector<HTMLElement>("input, select, textarea, button")?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref}>
+      <div className={cls("modal", wide && "wide")} role="dialog" aria-modal="true" aria-label={title} ref={ref}>
         <h2>{title}</h2>
         {children}
       </div>
     </div>
+  );
+}
+
+/** A yes/no dialog for anything that deletes data or messages many people. */
+export function Confirm({
+  title,
+  children,
+  confirmLabel,
+  danger,
+  busy,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={onClose}>
+      {children}
+      <div className="form-actions">
+        <button className="btn" onClick={onClose}>Go back</button>
+        <button className={cls("btn", danger ? "danger" : "primary")} disabled={busy} onClick={onConfirm}>{confirmLabel}</button>
+      </div>
+    </Modal>
   );
 }
 

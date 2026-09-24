@@ -69,6 +69,7 @@ async def book(
     enforce_availability: bool = True,
     rebooked_from: Appointment | None = None,
     notes: str | None = None,
+    step_minutes: int | None = None,
 ) -> Appointment:
     """Book one slot. Takes a lock on the resource so two patients can't get the same slot.
 
@@ -90,6 +91,8 @@ async def book(
         if schedule is None or schedule.contact_id != contact.id or schedule.status != ScheduleStatus.ACTIVE:
             raise BookingError("That treatment plan is not active.")
         await session.refresh(schedule, ["template"])
+        if schedule.template.kind == "payment":
+            raise BookingError("A fee plan can't be booked as a visit.")
         if duration_minutes is None and schedule.template.duration_minutes:
             duration_minutes = schedule.template.duration_minutes
         service = service or sched_engine.session_label(schedule.template, schedule.sessions_done + 1)
@@ -116,6 +119,7 @@ async def book(
             day,
             duration_minutes=int(length.total_seconds() // 60),
             exclude_appointment_id=exclude_id,
+            step_minutes=step_minutes,
         )
         if not any(s.start == start_at for s in free):
             raise SlotUnavailable("Sorry, that slot is no longer free.")

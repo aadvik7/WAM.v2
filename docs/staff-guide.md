@@ -1,4 +1,6 @@
-# WAM on WhatsApp — guide for doctors and the front desk
+# WAM on WhatsApp — guide for staff
+
+Clinics: see the commands below. Institutes: see [Institutes](#institutes) further down.
 
 Message the clinic's WhatsApp number from **your own phone** (the number saved for you in WAM admin). WAM
 knows it's you. Anything that cancels visits or messages many patients asks you to reply **YES and your PIN**.
@@ -38,3 +40,32 @@ WAM hands the chat to the team in the WAM inbox when a patient asks for a person
 complains, sends a voice note, or uses emergency words (then you also get a WhatsApp alert). Reply from the
 inbox; WAM stays quiet while a person is assigned to the chat. Resolve the chat when you're done and WAM
 takes over again.
+
+## Institutes
+
+Coordinators, teachers and the front desk message the **institute's** WhatsApp number from their own phones,
+so no teacher's personal number becomes the helpline. Anything that messages many people asks for **YES and
+your PIN** first.
+
+| Send | What happens | PIN? |
+| --- | --- | --- |
+| `Send to NEET-A2: Tomorrow's class is at 4 PM` | Shows a preview and the number of people, then sends to every student and parent in the batch, each individually | **Yes** |
+| `Send to NEET-A2 parents: PTM on Saturday` | Same, parents only (or `students`) | **Yes** |
+| `Absent NEET-A2 Physics: 12, 15, 21` | Parents of those students (roll numbers or names) get an absence alert | **Yes** |
+| `Announcement status` | Sent, delivered and read counts of your last announcement | No |
+| `Aarav paid` / `Paid 12` | Records the next fee installment and tells you when the next one is due | No |
+| `Aarav, fees` | Puts Aarav on the fee installment plan | No |
+| `My batches` | Your batches and how many students each has | No |
+| `Today's list`, `Summary`, `Find Aarav`, `help` | As above | No |
+
+**Who can do what:** coordinators can message any batch; teachers only the batches they are linked to in
+WAM admin (Batches → a batch → Teachers). The owner sets roles under Setup → Staff & roles.
+
+**Doubts:** when a student sends `Doubt: …`, WAM works out the subject (or asks) and assigns the chat to that
+subject's team in the WAM inbox. Reply from the inbox; resolving the chat closes the doubt.
+
+**Parent-teacher meetings:** create the meeting in WAM admin (Parent-teacher meetings). Parents reply `PTM`
+and pick a slot; the bookings show in Today's list and Appointments.
+
+**Sheets:** attendance, test results, student lists and the timetable are uploaded in WAM admin → Uploads.
+You always see a preview (who matched, which rows have problems, how many messages) before anything is sent.

@@ -5,7 +5,7 @@
 - **Consent notice on the first chat**: the text is set per clinic (Setup → Clinic → Consent message) and
   includes the privacy policy link. Continuing the chat after the notice records consent (`consent_at`);
   `STOP` opts the patient out of all reminders and proactive messages (`START` turns them back on).
-- **Purpose limitation**: numbers and messages are used only to manage visits and reminders. Nothing is sold
+- **Purpose limitation**: numbers and messages are used only to manage bookings, reminders and updates. Nothing is sold
   or used for ads.
 - **Data retention**: message logs older than the clinic's retention period (default 365 days) are deleted
   every night at 03:00.

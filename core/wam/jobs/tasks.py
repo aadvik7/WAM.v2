@@ -20,7 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wam import clock
 from wam.db import session_scope
 from wam.engine.schedules import active_appointment_for_schedule
-from wam.flows import flag_to_staff, followup_missed, nudge_schedule, send_reminder, staff_to_alert
+from wam.flows import (
+    flag_to_staff,
+    followup_missed,
+    nudge_schedule,
+    send_payment_reminder,
+    send_reminder,
+    staff_to_alert,
+)
 from wam.jobs.queue import schedule_job
 from wam.messaging import Outgoing, send_to_staff
 from wam.models import (
@@ -33,6 +40,7 @@ from wam.models import (
     PendingAction,
     Schedule,
     ScheduleStatus,
+    ScheduleTemplate,
 )
 from wam.monitoring import alert
 from wam.settings_defaults import get_setting, get_time_setting
@@ -42,6 +50,8 @@ from wam.windows import in_send_window, next_window_start
 log = logging.getLogger(__name__)
 
 MAX_JOB_ATTEMPTS = 3
+# Automatic patient messages wait for the business's send window; staff-triggered sends go out at once.
+WINDOWED_KINDS = {"missed_followup", "nudge_schedule"}
 
 
 # --------------------------------------------------------------------------------------
@@ -122,6 +132,8 @@ async def send_due_nudges(session: AsyncSession, business: Business) -> int:
     for schedule in schedules:
         try:
             async with session.begin_nested():
+                if schedule.template.kind == "payment":
+                    continue  # fee plans follow send_payment_reminders
                 if await active_appointment_for_schedule(session, schedule.id) is not None:
                     continue
                 if schedule.nudge_count >= max_nudges:
@@ -138,6 +150,78 @@ async def send_due_nudges(session: AsyncSession, business: Business) -> int:
                     sent += 1
         except Exception:
             log.exception("nudge failed for schedule %s", schedule.id)
+    return sent
+
+
+async def send_payment_reminders(session: AsyncSession, business: Business) -> int:
+    """Fee installments: a reminder `days_before` the due date, one on the due date, then overdue reminders
+    every few days; after `max_nudges` overdue reminders the family is flagged to staff."""
+    local = clock.local_now(business.timezone)
+    if not in_send_window(business, local) or local.time() < get_time_setting(
+        business.settings, "reminder_time"
+    ):
+        return 0
+    today = local.date()
+    horizon = today + dt.timedelta(days=30)
+    renudge = dt.timedelta(days=int(get_setting(business.settings, "renudge_after_days")))
+    max_nudges = int(get_setting(business.settings, "max_nudges"))
+    rows = (
+        (
+            await session.execute(
+                select(Schedule)
+                .join(ScheduleTemplate, ScheduleTemplate.id == Schedule.template_id)
+                .where(
+                    Schedule.business_id == business.id,
+                    Schedule.status == ScheduleStatus.ACTIVE,
+                    ScheduleTemplate.kind == "payment",
+                    Schedule.next_due_date.is_not(None),
+                    Schedule.next_due_date <= horizon,
+                )
+                .order_by(Schedule.next_due_date)
+                .limit(500)
+            )
+        )
+        .scalars()
+        .unique()
+        .all()
+    )
+    sent = 0
+    for schedule in rows:
+        due = schedule.next_due_date
+        assert due is not None
+        days_before = int((schedule.template.reminder_rules or {}).get("days_before", 3))
+        if today < due - dt.timedelta(days=days_before):
+            continue
+        last = (
+            clock.to_local(schedule.last_nudged_at, business.timezone).date()
+            if schedule.last_nudged_at
+            else None
+        )
+        overdue_sent = max(schedule.nudge_count - 2, 0)  # before-due + due-day reminders come first
+        send = False
+        if last is None:
+            send = True
+        elif today >= due and last < due:
+            send = True  # due-day reminder
+        elif today > due and clock.now() - (schedule.last_nudged_at or clock.now()) >= renudge:
+            if overdue_sent < max_nudges:
+                send = True
+            elif not schedule.needs_staff:
+                await flag_to_staff(
+                    session,
+                    business,
+                    schedule.contact,
+                    f"{schedule.template.name}: installment due {clock.fmt_date(due)} is still unpaid after reminders.",
+                    schedule,
+                )
+        if not send:
+            continue
+        try:
+            async with session.begin_nested():
+                if await send_payment_reminder(session, business, schedule):
+                    sent += 1
+        except Exception:
+            log.exception("payment reminder failed for schedule %s", schedule.id)
     return sent
 
 
@@ -253,7 +337,45 @@ async def execute_job(session: AsyncSession, job: Job) -> None:
         if schedule is not None:
             await nudge_schedule(session, business, schedule)
         return
+    if job.kind in ("broadcast_send", "broadcast_status"):
+        from wam.models import Broadcast
+        from wam.packs.institute import broadcasts
+
+        broadcast = await session.get(Broadcast, int(job.payload["broadcast_id"]))
+        if broadcast is None or broadcast.business_id != business.id:
+            job.status = JobStatus.CANCELLED
+            return
+        if job.kind == "broadcast_status":
+            await broadcasts.refresh_status(session, business, broadcast)
+            return
+        if await broadcasts.send_batch(session, business, broadcast):
+            await _continue_job(session, job, "broadcast_send", "broadcast_id", broadcast.id)
+        return
+    if job.kind == "import_send":
+        from wam.models import Import
+        from wam.packs.institute import imports
+
+        imp = await session.get(Import, int(job.payload["import_id"]))
+        if imp is None or imp.business_id != business.id:
+            job.status = JobStatus.CANCELLED
+            return
+        if await imports.send_batch(session, business, imp):
+            await _continue_job(session, job, "import_send", "import_id", imp.id)
+        return
     raise ValueError(f"unknown job kind {job.kind}")
+
+
+async def _continue_job(session: AsyncSession, job: Job, kind: str, key: str, obj_id: int) -> None:
+    """Queue the next batch of a long send right away (each batch is its own short job)."""
+    part = int(job.payload.get("part", 0)) + 1
+    await schedule_job(
+        session,
+        job.business_id,
+        kind,
+        clock.now(),
+        {key: obj_id, "part": part},
+        dedupe_key=f"{kind}:{obj_id}:{part}",
+    )
 
 
 async def run_due_jobs(limit: int = 50) -> int:
@@ -285,7 +407,7 @@ async def run_due_jobs(limit: int = 50) -> int:
                 if job is None:
                     continue
                 business = await session.get(Business, job.business_id)
-                if business is not None and not in_send_window(business):
+                if business is not None and job.kind in WINDOWED_KINDS and not in_send_window(business):
                     job.status = JobStatus.SCHEDULED
                     job.attempts -= 1
                     job.run_at = next_window_start(business)
@@ -341,6 +463,7 @@ async def business_tick(business_id: int) -> dict[str, Any]:
         result = {
             "reminders": await send_due_reminders(session, business),
             "nudges": await send_due_nudges(session, business),
+            "payment_reminders": await send_payment_reminders(session, business),
             "eod": await send_eod_check(session, business),
             "retention_deleted": await run_retention(session, business),
         }
@@ -365,6 +488,8 @@ async def tick(ctx: dict[str, Any] | None = None) -> dict[str, Any]:
             await alert(f"Scheduler tick failed for business {bid}: {type(exc).__name__}")
     await recover_stuck_jobs()
     results["jobs"] = await run_due_jobs()
+    if results["jobs"] and ctx is not None and ctx.get("redis") is not None:
+        await ctx["redis"].enqueue_job("run_jobs")  # long sends continue in batches right away
     if ctx is not None and ctx.get("redis") is not None:
         await ctx["redis"].set("wam:worker:heartbeat", str(int(clock.now().timestamp())), ex=600)
     return results

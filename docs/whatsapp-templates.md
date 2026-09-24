@@ -4,7 +4,9 @@ WAM can reply freely only within 24 hours of a patient's (or staff member's) las
 starts outside that window goes out as one of these Meta-approved templates. Inside the window WAM sends a
 richer free-text version of the same message instead.
 
-**Submit all clinic templates in week 2** (Meta Business Manager → WhatsApp Manager → Message templates):
+**Submit all clinic templates in week 2** (Meta Business Manager → WhatsApp Manager → Message templates).
+An institute submits the shared templates plus the four institute ones (`wam_announcement`,
+`wam_absence_alert`, `wam_test_result`, `wam_fee_reminder`):
 
 - Use the **exact name** below (WAM looks templates up by name and language).
 - Category: **Utility**. Language: the code you set in WAM admin → Setup → Clinic → *Template language code*

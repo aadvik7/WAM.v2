@@ -37,8 +37,15 @@ export function addDays(date: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-export function planProgress(done: number, total: number | null): string {
+export function planProgress(done: number, total: number | null, kind: "visit" | "payment" = "visit"): string {
+  if (kind === "payment") return total ? `${done} of ${total} paid` : `${done} paid (ongoing)`;
   return total ? `${done} of ${total}` : `${done} done (ongoing)`;
+}
+
+/** Rupees with Indian digit grouping: ₹1,20,000. */
+export function inr(amount: number | null | undefined): string {
+  if (amount === null || amount === undefined) return "";
+  return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
 export function cls(...parts: (string | false | null | undefined)[]): string {

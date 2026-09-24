@@ -8,12 +8,17 @@ import { useBusiness } from "@/lib/business";
 import { cls } from "@/lib/format";
 import { Toaster } from "@/components/ui";
 
-const NAV: { section?: string; href: string; label: string; superOnly?: boolean }[] = [
+const NAV: { section?: string; href: string; label: string; superOnly?: boolean; types?: string[] }[] = [
   { href: "/", label: "Today" },
   { href: "/patients", label: "Patients" },
   { href: "/plans", label: "Plans" },
   { href: "/appointments", label: "Appointments" },
   { href: "/reports", label: "Reports" },
+  { section: "Institute", href: "/institute/batches", label: "Batches", types: ["institute"] },
+  { href: "/institute/announcements", label: "Announcements", types: ["institute"] },
+  { href: "/institute/uploads", label: "Uploads", types: ["institute"] },
+  { href: "/institute/doubts", label: "Doubts", types: ["institute"] },
+  { href: "/institute/ptm", label: "Parent-teacher meetings", types: ["institute"] },
   { section: "Settings", href: "/setup", label: "Setup" },
   { href: "/messages", label: "Messages" },
   { href: "/simulator", label: "Simulator" },
@@ -21,6 +26,8 @@ const NAV: { section?: string; href: string; label: string; superOnly?: boolean 
   { href: "/audit", label: "Audit log" },
   { href: "/businesses", label: "Businesses", superOnly: true },
 ];
+
+const PEOPLE_LABEL: Record<string, string> = { clinic: "Patients", institute: "Students & parents", business: "Customers" };
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -33,14 +40,14 @@ export function Shell({ children }: { children: ReactNode }) {
           <span className="brand-dot" aria-hidden>W</span> WAM
         </div>
         <nav className="nav" aria-label="Main">
-          {NAV.filter((n) => !n.superOnly || isSuper).map((n) => (
+          {NAV.filter((n) => (!n.superOnly || isSuper) && (!n.types || (business && n.types.includes(business.type)))).map((n) => (
             <div key={n.href}>
               {n.section && <div className="nav-section">{n.section}</div>}
               <Link
                 href={n.href}
                 className={cls((n.href === "/" ? pathname === "/" : pathname.startsWith(n.href)) && "active")}
               >
-                {n.label}
+                {n.href === "/patients" ? PEOPLE_LABEL[business?.type ?? "clinic"] : n.label}
               </Link>
             </div>
           ))}

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
 import { addDays, fmtDate } from "@/lib/format";
 import { Card, Empty, ErrorBox, Tile, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 interface Report {
   date_from: string;
@@ -35,6 +36,7 @@ function todayIn(tz: string): string {
 
 export default function ReportsPage() {
   const { business } = useBusiness();
+  const v = useVocab();
   const today = business ? todayIn(business.timezone) : "";
   const [range, setRange] = useState({ from: addDays(today, -29), to: today });
   const { data, error } = useLoad(
@@ -68,7 +70,7 @@ export default function ReportsPage() {
             <Tile
               label="Visits recovered"
               value={data.visits_recovered.booked}
-              sub={`overdue or missed patients who rebooked via WAM · ${data.visits_recovered.came} already came`}
+              sub={`overdue or missed ${v.people} who rebooked via WAM · ${data.visits_recovered.came} already came`}
             />
             <Tile
               label="Plan completion rate"
@@ -83,7 +85,7 @@ export default function ReportsPage() {
             <Tile
               label="Answered without staff"
               value={pct(data.messages.rate_without_staff)}
-              sub={`${data.messages.answered_without_staff} of ${data.messages.patient_messages} patient messages (${data.messages.answered_by_ai} by AI)`}
+              sub={`${data.messages.answered_without_staff} of ${data.messages.patient_messages} ${v.person} messages (${data.messages.answered_by_ai} by AI)`}
             />
           </div>
           <Card title="Visits per day">

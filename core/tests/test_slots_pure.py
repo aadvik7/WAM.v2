@@ -86,3 +86,26 @@ def test_pick_spread_same_day_spaced():
     slots = slots_for(weekly=weekly)
     picked = pick_spread(slots, 3, TZ)
     assert [p.start for p in picked] == [ist(MONDAY, 9), ist(MONDAY, 11), ist(MONDAY, 13)]
+
+
+def test_extra_hours_add_to_a_closed_day_and_leave_still_wins():
+    saturday = MONDAY + dt.timedelta(days=5)
+    extra = [(ist(saturday, 10), ist(saturday, 11))]
+    slots = slots_for(date_from=saturday, date_to=saturday, extra=extra, slot_minutes=10)
+    assert len(slots) == 6 and slots[0].start == ist(saturday, 10)
+    leave = [(ist(saturday, 10, 30), ist(saturday, 12))]
+    slots = slots_for(date_from=saturday, date_to=saturday, extra=extra, leave=leave, slot_minutes=10)
+    assert [s.start for s in slots] == [ist(saturday, 10), ist(saturday, 10, 10), ist(saturday, 10, 20)]
+
+
+def test_extra_overlapping_weekly_hours_does_not_duplicate_slots():
+    extra = [(ist(MONDAY, 11), ist(MONDAY, 12, 30))]
+    slots = slots_for(extra=extra)
+    starts = [s.start for s in slots]
+    assert len(starts) == len(set(starts))
+    assert starts[-1] == ist(MONDAY, 12)
+
+
+def test_custom_step():
+    slots = slots_for(duration_minutes=10, step_minutes=10)
+    assert len(slots) == 12

@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { bpath, useBusiness } from "@/lib/business";
-import { fmtDate, fmtTime, planProgress } from "@/lib/format";
+import { fmtDate, fmtTime, inr, planProgress } from "@/lib/format";
 import type { Appointment, Contact, Schedule } from "@/lib/types";
 import { AppointmentActions, BookModal } from "@/components/Booking";
 import { Card, Empty, ErrorBox, StatusBadge, Tile, useAction, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 interface Today {
   date: string;
@@ -16,10 +17,12 @@ interface Today {
   counts: Record<string, number>;
   needs_staff: Contact[];
   due_unbooked: Schedule[];
+  fees_due?: Schedule[];
 }
 
 export default function TodayPage() {
   const { business } = useBusiness();
+  const v = useVocab();
   const { data, error, loading, reload } = useLoad(() => api<Today>(bpath(business, "/today")), [business?.id]);
   const [booking, setBooking] = useState(false);
   const nudge = useAction();
@@ -59,7 +62,7 @@ export default function TodayPage() {
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Time</th><th>Patient</th><th>Visit</th><th>Doctor</th><th>Status</th><th /></tr>
+                <tr><th>Time</th><th>{v.Person}</th><th>{v.Visit}</th><th>{v.Resource}</th><th>Status</th><th /></tr>
               </thead>
               <tbody>
                 {data.appointments.map((a) => (
@@ -67,7 +70,7 @@ export default function TodayPage() {
                     <td className="nowrap">{fmtTime(a.start_at)}</td>
                     <td>
                       <Link href={`/patients/${a.contact_id}`}>{a.contact_name || a.contact_phone}</Link>
-                      {a.recovered && <> <span className="badge accent" title="Overdue or missed patient who rebooked through WAM">recovered</span></>}
+                      {a.recovered && <> <span className="badge accent" title={`Overdue or missed ${v.person} who rebooked through WAM`}>recovered</span></>}
                     </td>
                     <td>{a.service || "—"}</td>
                     <td>{a.resource_name}</td>
@@ -89,12 +92,12 @@ export default function TodayPage() {
           ) : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Patient</th><th>Plan</th><th>Due</th><th>Nudges</th><th /></tr></thead>
+                <thead><tr><th>{v.Person}</th><th>Plan</th><th>Due</th><th>Nudges</th><th /></tr></thead>
                 <tbody>
                   {data.due_unbooked.map((s) => (
                     <tr key={s.id}>
                       <td><Link href={`/patients/${s.contact_id}`}>{s.contact_name || "Unknown"}</Link></td>
-                      <td>{s.template}<div className="small muted">{planProgress(s.sessions_done, s.sessions_total)}</div></td>
+                      <td>{s.template}<div className="small muted">{planProgress(s.sessions_done, s.sessions_total, s.kind)}</div></td>
                       <td className="nowrap">{fmtDate(s.next_due_date)} {s.overdue && <span className="badge danger">overdue</span>}</td>
                       <td>{s.nudge_count}{s.needs_staff && <> <span className="badge warn">call</span></>}</td>
                       <td className="actions">
@@ -135,9 +138,38 @@ export default function TodayPage() {
               </tbody>
             </table>
           )}
-          <p className="small muted" style={{ marginTop: 10 }}>Reply to these patients from the WAM inbox (Chatwoot).</p>
+          <p className="small muted" style={{ marginTop: 10 }}>Reply to these {v.people} from the WAM inbox (Chatwoot).</p>
         </Card>
       </div>
+      {data?.fees_due && data.fees_due.length > 0 && (
+        <Card title={`Fees due (${data.fees_due.length})`}>
+          <p className="small muted" style={{ marginTop: 0 }}>WAM reminds families before and on the due date. Record a payment when it comes in.</p>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>{v.Person}</th><th>Plan</th><th>Due</th><th>Reminders</th><th /></tr></thead>
+              <tbody>
+                {data.fees_due.map((s) => (
+                  <tr key={s.id}>
+                    <td><Link href={`/patients/${s.contact_id}`}>{s.contact_name || "Unknown"}</Link></td>
+                    <td>{s.template}{s.amount ? ` · ${inr(s.amount)}` : ""}<div className="small muted">{planProgress(s.sessions_done, s.sessions_total, s.kind)}</div></td>
+                    <td className="nowrap">{fmtDate(s.next_due_date)} {s.overdue && <span className="badge danger">overdue</span>}</td>
+                    <td>{s.nudge_count}{s.needs_staff && <> <span className="badge warn">call</span></>}</td>
+                    <td className="actions">
+                      <button
+                        className="btn small primary"
+                        disabled={nudge.busy}
+                        onClick={() => void nudge.run(() => api(bpath(business, `/schedules/${s.id}/payment`), { method: "POST" }), "Payment recorded").then(() => reload())}
+                      >
+                        Record payment
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
       {booking && <BookModal onClose={() => setBooking(false)} onDone={() => { setBooking(false); void reload(); }} />}
     </div>
   );

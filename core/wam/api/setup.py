@@ -73,6 +73,11 @@ COMMAND_KEYS = [
     "summary",
     "find",
     "help",
+    # institute pack
+    "announce",
+    "announce_all",
+    "absent",
+    "paid",
 ]
 
 
@@ -576,18 +581,25 @@ async def list_templates(business: BusinessDep, session: SessionDep) -> list[dic
     return [template_out(t) for t in rows]
 
 
-def _validate_template(session_count: int | None, offsets: list[int] | None) -> None:
+def _validate_template(
+    session_count: int | None, offsets: list[int] | None, kind: str = "visit", gap_days: int = 7
+) -> None:
     if offsets is not None:
         if not offsets:
             raise bad_request("Offsets can't be empty")
         if any(o < 0 for o in offsets) or offsets != sorted(offsets):
             raise bad_request("Offsets must be increasing day counts")
+    if kind == "payment" and not offsets and session_count != 1 and gap_days < 1:
+        raise bad_request("Installments need at least 1 day between them")
 
 
 @router.post(B + "/templates", status_code=201)
 async def create_template(body: TemplateIn, business: BusinessDep, session: SessionDep) -> dict[str, Any]:
-    _validate_template(body.session_count, body.offsets_days)
-    t = ScheduleTemplate(business_id=business.id, reminder_rules={}, **body.model_dump())
+    _validate_template(body.session_count, body.offsets_days, body.kind, body.gap_days)
+    data = body.model_dump()
+    days_before = data.pop("reminder_days_before")
+    rules = {"days_before": days_before} if days_before is not None else {}
+    t = ScheduleTemplate(business_id=business.id, reminder_rules=rules, **data)
     session.add(t)
     try:
         await session.flush()
@@ -605,10 +617,23 @@ async def update_template(
         raise not_found()
     data = body.model_dump(exclude_unset=True)
     ongoing = data.pop("ongoing", None)
+    if "reminder_days_before" in data:
+        days_before = data.pop("reminder_days_before")
+        rules = dict(t.reminder_rules or {})
+        if days_before is None:
+            rules.pop("days_before", None)
+        else:
+            rules["days_before"] = days_before
+        t.reminder_rules = rules
     if ongoing:
         data["session_count"] = None
         data["offsets_days"] = None
-    _validate_template(data.get("session_count", t.session_count), data.get("offsets_days", t.offsets_days))
+    _validate_template(
+        data.get("session_count", t.session_count),
+        data.get("offsets_days", t.offsets_days),
+        data.get("kind", t.kind),
+        data.get("gap_days", t.gap_days),
+    )
     for key, value in data.items():
         setattr(t, key, value)
     try:

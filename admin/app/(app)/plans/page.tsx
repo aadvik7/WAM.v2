@@ -7,11 +7,13 @@ import { bpath, useBusiness } from "@/lib/business";
 import { fmtDate, planProgress } from "@/lib/format";
 import type { Schedule } from "@/lib/types";
 import { Card, Empty, ErrorBox, StatusBadge, Tabs, useAction, useLoad } from "@/components/ui";
+import { useVocab } from "@/lib/vocab";
 
 type View = "active" | "overdue" | "call" | "completed" | "cancelled";
 
 export default function PlansPage() {
   const { business } = useBusiness();
+  const v = useVocab();
   const [view, setView] = useState<View>("active");
   const query =
     view === "overdue" ? { status: "active", overdue: true }
@@ -25,7 +27,7 @@ export default function PlansPage() {
       <div className="page-head">
         <div>
           <h1>Plans</h1>
-          <div className="muted">Every patient on a treatment plan or recall, and when their next visit is due.</div>
+          <div className="muted">Every {v.person} on a plan, recall or fee plan, and when their next {v.visit} or installment is due.</div>
         </div>
       </div>
       <Card>
@@ -44,18 +46,23 @@ export default function PlansPage() {
         {!data ? <Empty>Loading…</Empty> : data.length === 0 ? <Empty>Nothing here.</Empty> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Patient</th><th>Plan</th><th>Progress</th><th>Next due</th><th>Reminders</th><th>Status</th><th /></tr></thead>
+              <thead><tr><th>{v.Person}</th><th>Plan</th><th>Progress</th><th>Next due</th><th>Reminders</th><th>Status</th><th /></tr></thead>
               <tbody>
                 {data.map((s) => (
                   <tr key={s.id}>
                     <td><Link href={`/patients/${s.contact_id}`}>{s.contact_name || "Unknown"}</Link></td>
                     <td>{s.template}</td>
-                    <td>{planProgress(s.sessions_done, s.sessions_total)}</td>
+                    <td>{planProgress(s.sessions_done, s.sessions_total, s.kind)}</td>
                     <td className="nowrap">{s.next_due_date ? fmtDate(s.next_due_date) : "—"} {s.overdue && <span className="badge danger">overdue</span>}</td>
                     <td>{s.nudge_count}{s.missed_count > 0 && <span className="small muted"> · {s.missed_count} missed</span>}</td>
                     <td><StatusBadge status={s.status} /> {s.needs_staff && <span className="badge warn">call</span>}</td>
                     <td className="actions">
-                      {s.status === "active" && s.next_due_date && (
+                      {s.status === "active" && s.next_due_date && s.kind === "payment" && (
+                        <button className="btn small" disabled={nudge.busy} onClick={() => void nudge.run(() => api(bpath(business, `/schedules/${s.id}/payment`), { method: "POST" }), "Payment recorded").then(() => reload())}>
+                          Record payment
+                        </button>
+                      )}
+                      {s.status === "active" && s.next_due_date && s.kind !== "payment" && (
                         <button className="btn small" disabled={nudge.busy} onClick={() => void nudge.run(() => api(bpath(business, `/schedules/${s.id}/nudge`), { method: "POST" }), "Slots sent on WhatsApp").then(() => reload())}>
                           Send slots
                         </button>
