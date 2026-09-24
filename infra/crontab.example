@@ -1,0 +1,5 @@
+# Install with: crontab -e   (paths assume the repo is at /opt/wam)
+# Nightly backup at 02:30 IST (21:00 UTC)
+0 21 * * * /opt/wam/infra/backup.sh >> /var/log/wam-backup.log 2>&1
+# Health check every 5 minutes
+*/5 * * * * /opt/wam/infra/monitor.sh >> /var/log/wam-monitor.log 2>&1
