@@ -1,0 +1,174 @@
+# WAM production stack for one VPS (Mumbai region, 8 GB RAM).
+#   cp .env.example .env   # fill in every value
+#   ./deploy.sh            # first run: builds, migrates, prepares Chatwoot, starts everything
+#
+# Services: postgres (pgvector, shared), redis, chatwoot (rails + sidekiq), wam-core (API),
+# wam-worker (queue + scheduler), caddy (HTTPS). wam-admin is optional here (profile "admin");
+# the default plan is to host the admin on Vercel.
+
+x-chatwoot: &chatwoot
+  image: chatwoot/chatwoot:v4.18.0-ce
+  restart: unless-stopped
+  environment:
+    SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+    DEFAULT_LOCALE: ${DEFAULT_LOCALE:-en}
+    MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-}
+    SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+    SMTP_PORT: ${SMTP_PORT:-587}
+    SMTP_USERNAME: ${SMTP_USERNAME:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    SMTP_AUTHENTICATION: ${SMTP_AUTHENTICATION:-login}
+    SMTP_ENABLE_STARTTLS_AUTO: ${SMTP_ENABLE_STARTTLS_AUTO:-true}
+    NODE_ENV: production
+    RAILS_ENV: production
+    INSTALLATION_ENV: docker
+    RAILS_LOG_TO_STDOUT: "true"
+    RAILS_SERVE_STATIC_FILES: "true"
+    POSTGRES_HOST: postgres
+    POSTGRES_USERNAME: postgres
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_DATABASE: chatwoot
+    REDIS_URL: redis://redis:6379
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    FRONTEND_URL: https://${INBOX_DOMAIN}
+    ENABLE_ACCOUNT_SIGNUP: "false"
+    ACTIVE_STORAGE_SERVICE: local
+  volumes:
+    - chatwoot_storage:/app/storage
+    - ../chatwoot/brand-assets:/app/public/brand-assets:ro
+    - ../chatwoot/scripts:/wam:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+x-wam: &wam
+  build: ../core
+  image: wam-core:latest
+  restart: unless-stopped
+  environment:
+    ENVIRONMENT: production
+    DATABASE_URL: postgresql+asyncpg://wam:${WAM_DB_PASSWORD}@postgres:5432/wam
+    REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+    SECRET_KEY: ${WAM_SECRET_KEY}
+    WEBHOOK_SECRET: ${WAM_WEBHOOK_SECRET}
+    CHATWOOT_BASE_URL: http://chatwoot:3000
+    CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN:-}
+    CHATWOOT_BOT_TOKEN: ${CHATWOOT_BOT_TOKEN:-}
+    CHATWOOT_TEMPLATE_FORMAT: ${CHATWOOT_TEMPLATE_FORMAT:-enhanced}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    AI_MODEL: ${AI_MODEL:-claude-haiku-4-5}
+    ENABLE_SIMULATOR: ${ENABLE_SIMULATOR:-true}
+    ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+    BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: chatwoot
+      WAM_DB_PASSWORD: ${WAM_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  chatwoot:
+    <<: *chatwoot
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+
+  chatwoot-sidekiq:
+    <<: *chatwoot
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  wam-migrate:
+    <<: *wam
+    restart: "no"
+    command: ["python", "-m", "wam.cli", "bootstrap"]
+
+  wam-core:
+    <<: *wam
+    depends_on:
+      wam-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  wam-worker:
+    <<: *wam
+    command: ["arq", "wam.jobs.worker.WorkerSettings"]
+    healthcheck:
+      disable: true
+    depends_on:
+      wam-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  wam-admin:
+    profiles: ["admin"]
+    build: ../admin
+    image: wam-admin:latest
+    restart: unless-stopped
+    environment:
+      CORE_URL: http://wam-core:8000
+      COOKIE_SECURE: "true"
+    depends_on:
+      - wam-core
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      INBOX_DOMAIN: ${INBOX_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-admin.invalid}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - chatwoot
+      - wam-core
+
+volumes:
+  postgres_data:
+  redis_data:
+  chatwoot_storage:
+  caddy_data:
+  caddy_config:

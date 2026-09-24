@@ -1,0 +1,22 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# WAM inbox (rebranded Chatwoot)
+{$INBOX_DOMAIN} {
+	encode gzip
+	reverse_proxy chatwoot:3000
+}
+
+# WAM core API: Chatwoot webhooks + admin API (called by WAM admin on Vercel)
+{$API_DOMAIN} {
+	encode gzip
+	# Set ENABLE_SIMULATOR=false in .env to switch the (admin-only) simulator off in production.
+	reverse_proxy wam-core:8000
+}
+
+# Optional: self-hosted WAM admin (docker compose --profile admin up -d)
+{$ADMIN_DOMAIN} {
+	encode gzip
+	reverse_proxy wam-admin:3000
+}
